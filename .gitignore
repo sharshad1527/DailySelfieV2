@@ -2,3 +2,7 @@
 logs/
 .venv/
 logs/
+__pycache__/
+__pycache__
+dist
+dist/
