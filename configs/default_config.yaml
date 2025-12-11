@@ -1,0 +1,11 @@
+installed_with_venv: false # boolean
+
+venv_path: "" # string — path to created venv, empty if none
+
+autostart_enabled: false # boolean
+
+photos_path: "./photos" # string — default relative path
+
+log_path: "./logs/app.log.jsonl" # string
+
+retention_days: 0 # int (0 = off for MVP)
