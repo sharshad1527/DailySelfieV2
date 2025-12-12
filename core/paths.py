@@ -172,8 +172,8 @@ def photos_folder_for_ts(root: Path, year: int) -> Path:
 if __name__ == "__main__":
     # Quick smoke test when run directly
     p = get_app_paths("DailySelfie", ensure=True)
-    print("Resolved paths:")
     print(f"OS: {p.os_name}")
+    print("Resolved paths:")
     print(f"project_root: {p.project_root}")
     print(f"config_dir: {p.config_dir}")
     print(f"data_dir:   {p.data_dir}")
