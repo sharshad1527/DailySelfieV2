@@ -27,30 +27,11 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 
-def capture_once(app_paths, *, camera_index: int = 0, width: Optional[int] = None, height: Optional[int] = None, quality: int = 90, logger=None) -> Dict[str, Any]:
-    """Capture one image and save it.
-
-    Parameters
-    ----------
-    app_paths: object
-        Object with attribute `photos_root` (Path). Typically AppPaths from paths.py.
-    camera_index: int
-        Camera index to use
-    width, height: Optional[int]
-        Requested camera frame dimensions
-    quality: int
-        JPEG quality 1-100
-    logger: logging.Logger
-        Optional logger; if provided used for structured logs
-
-    Returns
-    -------
-    dict
-        keys: success, path, timestamp, error, uuid
-    """
-    # Local imports to avoid hard import-time dependency on OpenCV in callers
+def capture_once(app_paths, *, camera_index: int = 0, width: Optional[int] = None, height: Optional[int] = None,
+                 quality: int = 90, logger=None, allow_retake: bool = False) -> Dict[str, Any]:
+    """Capture one image and save it. Enforces one-photo-per-day unless allow_retake=True."""
     try:
-        from core.camera import Camera
+        from core.camera import Camera  # package-qualified
     except Exception as e:
         msg = f"camera dependency error: {e}"
         if logger:
@@ -58,7 +39,7 @@ def capture_once(app_paths, *, camera_index: int = 0, width: Optional[int] = Non
         return {"success": False, "path": None, "timestamp": None, "error": msg, "uuid": None}
 
     try:
-        from core.storage import save_image_bytes
+        from core.storage import save_image_bytes, last_image_for_date
     except Exception as e:
         msg = f"storage dependency error: {e}"
         if logger:
@@ -66,6 +47,15 @@ def capture_once(app_paths, *, camera_index: int = 0, width: Optional[int] = Non
         return {"success": False, "path": None, "timestamp": None, "error": msg, "uuid": None}
 
     ts = datetime.now(timezone.utc)
+
+    # Single-photo-per-day check
+    existing = last_image_for_date(Path(app_paths.photos_root), ts)
+    if existing and not allow_retake:
+        msg = f"photo already exists for {ts.date()}: {existing}"
+        if logger:
+            logger.info("capture_blocked_one_per_day", extra={"meta": {"existing": str(existing), "date": ts.date().isoformat()}})
+        return {"success": False, "path": str(existing), "timestamp": ts.isoformat(), "error": msg, "uuid": None}
+
     jpeg_bytes: Optional[bytes] = None
     try:
         with Camera(index=camera_index, width=width, height=height) as cam:
@@ -82,7 +72,6 @@ def capture_once(app_paths, *, camera_index: int = 0, width: Optional[int] = Non
             logger.error(msg)
         return {"success": False, "path": None, "timestamp": None, "error": msg, "uuid": None}
 
-    # Save
     try:
         res = save_image_bytes(Path(app_paths.photos_root), ts, jpeg_bytes)
         if not res.success:
@@ -91,12 +80,11 @@ def capture_once(app_paths, *, camera_index: int = 0, width: Optional[int] = Non
                 logger.error(msg, extra={"meta": {"error": res.error}})
             return {"success": False, "path": None, "timestamp": ts.isoformat(), "error": msg, "uuid": None}
         saved_path = res.path
-        # derive uuid from filename
-        uuid_token = saved_path.name.split("_")[-1].replace('.jpg', '')
-        meta = {"success": True, "path": saved_path, "timestamp": ts.isoformat(), "error": None, "uuid": uuid_token}
+        uuid_token = saved_path.name.split("_")[-1].replace(".jpg", "")
+        # Log the saved photo with structured metadata (so GUI can read logs)
         if logger:
-            logger.info("capture_saved", extra={"meta": {"path": str(saved_path), "timestamp": ts.isoformat(), "uuid": uuid_token}})
-        return meta
+            logger.info("image_saved", extra={"meta": {"path": str(saved_path), "timestamp": ts.isoformat(), "uuid": uuid_token}})
+        return {"success": True, "path": str(saved_path), "timestamp": ts.isoformat(), "error": None, "uuid": uuid_token}
     except Exception as e:
         msg = f"unexpected save error: {e}"
         if logger:

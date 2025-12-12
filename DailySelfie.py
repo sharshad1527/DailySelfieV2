@@ -63,16 +63,17 @@ def cmd_list_cameras(logger, max_test=8):
         logger.error("camera_list_failed", extra={"meta": {"error": str(e)}})
         print("Camera listing unavailable — install OpenCV or create venv first.")
         return 3
-    cams = list_cameras(max_test=max_test)
+    cams = list_cameras(max_test=max_test, only_available=True)
     if not cams:
-        print("No cameras detected or OpenCV missing.")
+        print("No usable cameras detected.")
         return 4
     for i, res in cams.items():
         print(f"{i}: available={res.available} read_ok={res.read_ok} msg={res.message}")
     return 0
 
 
-def cmd_capture(paths, logger, camera_index=0, width=None, height=None, quality=90):
+
+def cmd_capture(paths, logger, camera_index=0, width=None, height=None, quality=90, allow_retake=False):
     try:
         from core.capture import capture_once
     except Exception as e:
@@ -80,7 +81,7 @@ def cmd_capture(paths, logger, camera_index=0, width=None, height=None, quality=
         print("Capture module unavailable — ensure core modules are on PYTHONPATH and OpenCV is installed.")
         return 5
 
-    out = capture_once(paths, camera_index=camera_index, width=width, height=height, quality=quality, logger=logger)
+    out = capture_once(paths, camera_index=camera_index, width=width, height=height, quality=quality, logger=logger, allow_retake=allow_retake)
     if out.get("success"):
         print("Captured:", out.get("path"))
         return 0
@@ -134,6 +135,7 @@ def main(argv=None):
     parser.add_argument("--create-venv", action="store_true")
     parser.add_argument("--list-cameras", action="store_true")
     parser.add_argument("--capture", action="store_true")
+    parser.add_argument("--allow-retake", action="store_true", help="Allow retaking a photo even if one exists for today")
     parser.add_argument("--delete-last", action="store_true")
     parser.add_argument("--tail-logs", type=int, nargs="?", const=20)
     parser.add_argument("--camera-index", type=int, default=0)
@@ -154,7 +156,7 @@ def main(argv=None):
     if args.list_cameras:
         return cmd_list_cameras(logger)
     if args.capture:
-        return cmd_capture(paths, logger, camera_index=args.camera_index, width=args.width, height=args.height, quality=args.quality)
+        return cmd_capture(paths, logger, camera_index=args.camera_index, width=args.width, height=args.height, quality=args.quality, allow_retake=args.allow_retake)
     if args.delete_last:
         return cmd_delete_last(paths, logger)
     if args.tail_logs is not None:

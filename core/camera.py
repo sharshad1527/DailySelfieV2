@@ -119,17 +119,15 @@ class Camera:
         return buf.tobytes()
 
 
-def list_cameras(max_test: int = 8) -> Dict[int, CameraResult]:
-    """Probe camera indices from 0..max_test-1 and return a mapping of index->CameraResult.
-
-    This function attempts a single quick open+read to determine availability. It is
-    intentionally conservative to avoid hogging devices.
+def list_cameras(max_test: int = 8, only_available: bool = True) -> Dict[int, CameraResult]:
+    """
+    Probe camera indices 0..max_test-1 and return index->CameraResult.
+    If only_available is True, callers should filter and display only those with available & read_ok.
     """
     results: Dict[int, CameraResult] = {}
     try:
         import cv2
     except Exception:
-        # OpenCV not present — return empty mapping
         return results
 
     for i in range(max_test):
@@ -137,7 +135,6 @@ def list_cameras(max_test: int = 8) -> Dict[int, CameraResult]:
         read_ok = False
         message = None
         try:
-            # prefer platform-appropriate backend
             backend = cv2.CAP_DSHOW if platform.system().lower() == "windows" else cv2.CAP_ANY
             try:
                 cap = cv2.VideoCapture(i, backend)
@@ -145,7 +142,6 @@ def list_cameras(max_test: int = 8) -> Dict[int, CameraResult]:
                 cap = cv2.VideoCapture(i)
             opened = bool(cap and cap.isOpened())
             if opened:
-                # try a single read
                 ret, _ = cap.read()
                 read_ok = bool(ret)
             try:
@@ -155,7 +151,12 @@ def list_cameras(max_test: int = 8) -> Dict[int, CameraResult]:
         except Exception as e:
             message = str(e)
         results[i] = CameraResult(index=i, available=opened, opened=opened, read_ok=read_ok, message=message)
+
+    if only_available:
+        # shrink to only usable cameras
+        return {i: r for i, r in results.items() if r.available and r.read_ok}
     return results
+
 
 
 def find_first_camera(max_test: int = 8) -> Optional[int]:
