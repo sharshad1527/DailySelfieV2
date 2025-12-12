@@ -6,16 +6,24 @@ High-level capture pipeline for DailySelfie.
 - Encodes JPEG bytes with requested quality
 - Saves into storage (root/YYYY/MM/YYYY-MM-DD_HHMMSS.jpg)
 - Enforces one-photo-per-day; when allow_retake=True deletes previous photo and records deletion
-- Appends capture metadata to data/captures.jsonl (append-only)
+- Records capture/deletion events via core.index_api (writes DB + sidecar + audit JSONL)
 """
 from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-def capture_once(app_paths, *, camera_index: int = 0, width: Optional[int] = None,
-                 height: Optional[int] = None, quality: int = 90, logger=None,
-                 allow_retake: bool = False) -> Dict[str, Any]:
+
+def capture_once(
+    app_paths,
+    *,
+    camera_index: int = 0,
+    width: Optional[int] = None,
+    height: Optional[int] = None,
+    quality: int = 90,
+    logger=None,
+    allow_retake: bool = False,
+) -> Dict[str, Any]:
     """
     Capture one image and save it.
 
@@ -38,15 +46,20 @@ def capture_once(app_paths, *, camera_index: int = 0, width: Optional[int] = Non
         from core.storage import (
             save_image_bytes,
             last_image_for_date,
-            append_capture_index,
             delete_last_image_for_date,
-            append_deletion_index,
         )
     except Exception as e:
         msg = f"storage dependency error: {e}"
         if logger:
             logger.error(msg)
         return {"success": False, "path": None, "timestamp": None, "error": msg, "id": None}
+
+    # index API imported lazily so capture still works if index modules fail
+    IndexAPI_getter = None
+    try:
+        from core.index_api import get_api as IndexAPI_getter  # type: ignore
+    except Exception:
+        IndexAPI_getter = None
 
     ts = datetime.now(timezone.utc)
 
@@ -58,26 +71,25 @@ def capture_once(app_paths, *, camera_index: int = 0, width: Optional[int] = Non
             logger.info("capture_blocked_one_per_day", extra={"meta": {"existing": str(existing), "date": ts.date().isoformat()}})
         return {"success": False, "path": str(existing), "timestamp": ts.isoformat(), "error": msg, "id": None}
 
-    # If retake requested and an existing image exists, delete it and append deletion index
+    # If retake requested and an existing image exists, delete it and record deletion via index API
     if existing and allow_retake:
         ok_del, err_del, deleted_path = delete_last_image_for_date(Path(app_paths.photos_root), ts)
         if ok_del:
             if logger:
                 logger.info("retake_deleted_previous", extra={"meta": {"path": str(deleted_path)}})
-            deletion_entry = {
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "action": "delete",
-                "path": str(deleted_path),
-                "reason": "retake",
-                "id": deleted_path.stem,  # filename without extension (YYYY-MM-DD_HHMMSS)
-            }
-            index_file = Path(app_paths.data_dir) / "captures.jsonl"
-            try:
-                append_deletion_index(index_file, deletion_entry)
-            except Exception:
-                # ensure deletion doesn't block capture; log if available
-                if logger:
-                    logger.exception("append_deletion_index_failed")
+            # record deletion in index (DB + JSONL + sidecar removal) if API available
+            if IndexAPI_getter is not None:
+                try:
+                    api = IndexAPI_getter(app_paths)
+                    try:
+                        api.record_deletion(deleted_path.stem, reason="retake")
+                    except Exception:
+                        if logger:
+                            logger.exception("index_deletion_record_failed")
+                except Exception:
+                    # get_api construction failed; log and continue
+                    if logger:
+                        logger.exception("index_api_get_failed_for_deletion")
         else:
             if logger:
                 logger.warning("retake_delete_failed", extra={"meta": {"path": str(existing), "err": err_del}})
@@ -89,7 +101,8 @@ def capture_once(app_paths, *, camera_index: int = 0, width: Optional[int] = Non
             frame = cam.read_frame()  # numpy array
             # encode to JPEG
             import cv2
-            ok, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
+
+            ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
             if not ok:
                 raise RuntimeError("JPEG encode failed")
             jpeg_bytes = buf.tobytes()
@@ -126,24 +139,54 @@ def capture_once(app_paths, *, camera_index: int = 0, width: Optional[int] = Non
 
         # Build index entry
         index_entry = {
+            "id": id_token,
             "ts": ts.isoformat(),
             "path": str(saved_path),
-            "id": id_token,
             "width": width_px,
             "height": height_px,
             "resolution": f"{width_px}x{height_px}" if width_px and height_px else None,
             "mood": None,  # CLI capture has no mood; GUI may update per-uuid sidecar later
+            "notes": None,
             "action": "capture",
         }
 
-        # Append to captures index (data/captures.jsonl)
-        index_file = Path(app_paths.data_dir) / "captures.jsonl"
-        try:
-            append_capture_index(index_file, index_entry)
-        except Exception:
-            if logger:
-                logger.exception("append_capture_index_failed")
+        # Record via IndexAPI if available (writes JSONL audit + DB + sidecar under lock)
+        if IndexAPI_getter is not None:
+            try:
+                api = IndexAPI_getter(app_paths)
+                try:
+                    api.record_capture(index_entry)
+                except Exception:
+                    # Index recording failed; log but do not fail the capture (image file exists)
+                    if logger:
+                        logger.exception("index_record_failed")
+                    return {"success": True, "path": str(saved_path), "timestamp": ts.isoformat(), "error": "index_record_failed", "id": id_token}
+            except Exception:
+                if logger:
+                    logger.exception("index_api_get_failed_for_capture")
+                return {"success": True, "path": str(saved_path), "timestamp": ts.isoformat(), "error": "index_api_get_failed", "id": id_token}
+        else:
+            # Fallback: append audit JSONL directly if index API not available
+            try:
+                from core.storage import append_capture_index
 
+                index_file = Path(app_paths.data_dir) / "captures.jsonl"
+                try:
+                    append_capture_index(index_file, index_entry)
+                except Exception:
+                    if logger:
+                        logger.exception("append_capture_index_failed_fallback")
+                # create sidecar stub directly as a best-effort fallback
+                try:
+                    from core.metadata import write_meta
+
+                    write_meta(Path(app_paths.data_dir), id_token, {"id": id_token, "mood": None, "notes": None})
+                except Exception:
+                    pass
+            except Exception:
+                # nothing to do; index modules missing
+                if logger:
+                    logger.debug("index modules missing; skipped recording")
         # Log saved image
         if logger:
             logger.info("image_saved", extra={"meta": {"path": str(saved_path), "timestamp": ts.isoformat(), "id": id_token}})
@@ -160,6 +203,7 @@ def capture_once(app_paths, *, camera_index: int = 0, width: Optional[int] = Non
 if __name__ == "__main__":
     from core.paths import get_app_paths
     from core.logging import init_logger
+
     p = get_app_paths("DailySelfie", ensure=True)
     logger = init_logger(p.logs_dir)
     out = capture_once(p, camera_index=0, width=640, height=480, quality=85, logger=logger, allow_retake=True)
