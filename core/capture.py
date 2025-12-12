@@ -50,7 +50,7 @@ def capture_once(app_paths, *, camera_index: int = 0, width: Optional[int] = Non
     """
     # Local imports to avoid hard import-time dependency on OpenCV in callers
     try:
-        from camera import Camera
+        from core.camera import Camera
     except Exception as e:
         msg = f"camera dependency error: {e}"
         if logger:
@@ -58,7 +58,7 @@ def capture_once(app_paths, *, camera_index: int = 0, width: Optional[int] = Non
         return {"success": False, "path": None, "timestamp": None, "error": msg, "uuid": None}
 
     try:
-        from storage import save_image_bytes
+        from core.storage import save_image_bytes
     except Exception as e:
         msg = f"storage dependency error: {e}"
         if logger:

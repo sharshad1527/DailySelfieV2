@@ -3,13 +3,13 @@ opencv-python>=4.8.0
 
 # optional / useful in dev (uncomment if you need)
 # numpy is pulled in by opencv but you can pin it explicitly
-# numpy>=1.25.0
+numpy>=1.25.0
 
 # GUI choices (uncomment when you implement the GUI)
-# PySide6>=6.6.0          # Qt-based GUI (commercial-friendly)
-# PyQt6>=6.8.0            # alternative Qt binding
-# pillow>=10.0.0          # image utilities if needed
+PySide6>=6.6.0          # Qt-based GUI (commercial-friendly)
+PyQt6>=6.8.0            # alternative Qt binding
+pillow>=10.0.0          # image utilities if needed
 
 # tooling for tests / linting (dev-only)
-# pytest>=8.0.0
-# black
+pytest>=8.0.0
+black

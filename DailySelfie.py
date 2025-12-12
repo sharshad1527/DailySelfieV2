@@ -58,7 +58,7 @@ def cmd_create_venv(paths, logger, requirements_path=None):
 
 def cmd_list_cameras(logger, max_test=8):
     try:
-        from camera import list_cameras
+        from core.camera import list_cameras
     except Exception as e:
         logger.error("camera_list_failed", extra={"meta": {"error": str(e)}})
         print("Camera listing unavailable — install OpenCV or create venv first.")
@@ -74,7 +74,7 @@ def cmd_list_cameras(logger, max_test=8):
 
 def cmd_capture(paths, logger, camera_index=0, width=None, height=None, quality=90):
     try:
-        from capture import capture_once
+        from core.capture import capture_once
     except Exception as e:
         logger.error("capture_module_missing", extra={"meta": {"error": str(e)}})
         print("Capture module unavailable — ensure core modules are on PYTHONPATH and OpenCV is installed.")
@@ -92,7 +92,7 @@ def cmd_capture(paths, logger, camera_index=0, width=None, height=None, quality=
 def cmd_delete_last(paths, logger, for_date: datetime | None = None):
     # lazy import
     try:
-        from storage import last_image_for_date
+        from core.storage import last_image_for_date
     except Exception as e:
         logger.error("storage_missing", extra={"meta": {"error": str(e)}})
         print("Storage module missing")
