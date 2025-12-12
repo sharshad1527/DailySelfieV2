@@ -1,3 +1,5 @@
+# core/camera.py
+
 """
 camera.py
 
@@ -12,23 +14,61 @@ Notes:
 - This module depends on OpenCV (cv2). If cv2 is not installed users of this module
   will receive a clear RuntimeError asking them to install dependencies or create the venv.
 - On Windows the default backend attempts to use CAP_DSHOW for faster camera access.
-
 """
 from __future__ import annotations
 from dataclasses import dataclass
 import platform
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict
+import os
+import contextlib
+import sys
 
-
-# Silence OpenCV V4L2 warnings globally
+# Silence OpenCV V4L2 warnings at Python level where possible
 try:
     import cv2
+
     try:
         cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
     except Exception:
-        cv2.setLogLevel(3)
+        # fallback for older OpenCV
+        try:
+            cv2.setLogLevel(3)
+        except Exception:
+            pass
 except Exception:
-    pass
+    cv2 = None  # type: ignore
+
+# -------------------------------------------------------------
+# Helper: suppress native stderr during noisy native calls
+# -------------------------------------------------------------
+@contextlib.contextmanager
+def suppress_stderr():
+    """
+    Temporarily redirect low-level C library stderr to os.devnull.
+    Works on POSIX and Windows. Use only around noisy native calls.
+    """
+    devnull = None
+    old_stderr_fd = None
+    try:
+        devnull = open(os.devnull, "w")
+        # duplicate original stderr fd
+        old_stderr_fd = os.dup(2)
+        # redirect stderr to devnull
+        os.dup2(devnull.fileno(), 2)
+        yield
+    except Exception:
+        # if anything goes wrong, yield and do not crash
+        yield
+    finally:
+        try:
+            if old_stderr_fd is not None:
+                os.dup2(old_stderr_fd, 2)
+                os.close(old_stderr_fd)
+            if devnull is not None:
+                devnull.close()
+        except Exception:
+            # best-effort restore; ignore failures
+            pass
 
 
 @dataclass
@@ -57,12 +97,8 @@ class Camera:
         self._cap = None
 
     def __enter__(self):
-        try:
-            import cv2
-
-        
-        except Exception as e:
-            raise RuntimeError(f"OpenCV (cv2) is required for camera operations: {e}")
+        if cv2 is None:
+            raise RuntimeError("OpenCV (cv2) is required for camera operations")
 
         flags = 0
         if self.backend is not None:
@@ -76,10 +112,18 @@ class Camera:
 
         # VideoCapture accepts (index, apiPreference) in newer OpenCV
         try:
-            self._cap = cv2.VideoCapture(self.index, flags)
-        except TypeError:
-            # older bindings may not accept two args
-            self._cap = cv2.VideoCapture(self.index)
+            with suppress_stderr():
+                try:
+                    self._cap = cv2.VideoCapture(self.index, flags)
+                except TypeError:
+                    # older bindings may not accept two args
+                    self._cap = cv2.VideoCapture(self.index)
+        except Exception:
+            # in case suppress_stderr wrapper fails, try without it
+            try:
+                self._cap = cv2.VideoCapture(self.index)
+            except Exception:
+                self._cap = None
 
         if not self._cap or not self._cap.isOpened():
             raise RuntimeError(f"Failed to open camera index {self.index}")
@@ -112,7 +156,12 @@ class Camera:
         """Return the next camera frame as a numpy array. Raises RuntimeError on failure."""
         if self._cap is None:
             raise RuntimeError("Camera not opened")
-        ret, frame = self._cap.read()
+        # reading can also emit native warnings — suppress them
+        try:
+            with suppress_stderr():
+                ret, frame = self._cap.read()
+        except Exception as e:
+            raise RuntimeError(f"Failed to read frame from camera: {e}")
         if not ret or frame is None:
             raise RuntimeError("Failed to read frame from camera")
         return frame
@@ -120,8 +169,7 @@ class Camera:
     def read_jpeg(self, quality: int = 90) -> bytes:
         """Capture one frame and return jpeg bytes encoded with given quality."""
         try:
-            import cv2
-            import numpy as np
+            import numpy as np  # noqa: F401
         except Exception as e:
             raise RuntimeError(f"Dependencies missing for jpeg encoding: {e}")
 
@@ -138,9 +186,7 @@ def list_cameras(max_test: int = 8, only_available: bool = True) -> Dict[int, Ca
     If only_available is True, callers should filter and display only those with available & read_ok.
     """
     results: Dict[int, CameraResult] = {}
-    try:
-        import cv2
-    except Exception:
+    if cv2 is None:
         return results
 
     for i in range(max_test):
@@ -150,15 +196,30 @@ def list_cameras(max_test: int = 8, only_available: bool = True) -> Dict[int, Ca
         try:
             backend = cv2.CAP_DSHOW if platform.system().lower() == "windows" else cv2.CAP_ANY
             try:
-                cap = cv2.VideoCapture(i, backend)
-            except TypeError:
-                cap = cv2.VideoCapture(i)
+                with suppress_stderr():
+                    try:
+                        cap = cv2.VideoCapture(i, backend)
+                    except TypeError:
+                        cap = cv2.VideoCapture(i)
+            except Exception:
+                # fallback attempt without suppression
+                try:
+                    cap = cv2.VideoCapture(i)
+                except Exception as e:
+                    cap = None
+                    message = str(e)
+
             opened = bool(cap and cap.isOpened())
             if opened:
-                ret, _ = cap.read()
+                try:
+                    with suppress_stderr():
+                        ret, _ = cap.read()
+                except Exception:
+                    ret = False
                 read_ok = bool(ret)
             try:
-                cap.release()
+                if cap:
+                    cap.release()
             except Exception:
                 pass
         except Exception as e:
@@ -169,7 +230,6 @@ def list_cameras(max_test: int = 8, only_available: bool = True) -> Dict[int, Ca
         # shrink to only usable cameras
         return {i: r for i, r in results.items() if r.available and r.read_ok}
     return results
-
 
 
 def find_first_camera(max_test: int = 8) -> Optional[int]:
