@@ -26,9 +26,9 @@ import argparse
 import sys
 from datetime import datetime
 
-from paths import get_app_paths
-from logging import init_logger, read_jsonl_tail, get_logger
-from venv_helper import ensure_venv, venv_python
+from core.paths import get_app_paths
+from core.logging import init_logger, read_jsonl_tail, get_logger
+from core.venv_helper import ensure_venv, venv_python
 
 # Local imports for optional capabilities (delayed to runtime where reasonable)
 
