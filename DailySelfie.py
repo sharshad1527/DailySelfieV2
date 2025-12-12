@@ -30,6 +30,10 @@ from core.paths import get_app_paths
 from core.logging import init_logger, read_jsonl_tail, get_logger
 from core.venv_helper import ensure_venv, venv_python
 
+# Index API for DB wiring
+from core.index_api import get_api as get_index_api
+
+
 # Local imports for optional capabilities (delayed to runtime where reasonable)
 
 
@@ -84,6 +88,9 @@ def cmd_capture(paths, logger, camera_index=0, width=None, height=None, quality=
     out = capture_once(paths, camera_index=camera_index, width=width, height=height, quality=quality, logger=logger, allow_retake=allow_retake)
     if out.get("success"):
         print("Captured:", out.get("path"))
+        # If index recording returned an error message, show it too (non-fatal)
+        if out.get("error"):
+            print("Note:", out.get("error"))
         return 0
     else:
         print("Capture failed:", out.get("error"))
@@ -130,19 +137,56 @@ def main(argv=None):
     paths = get_app_paths("DailySelfie", ensure=True)
     logger = init_logger(paths.logs_dir)
 
+    # Initialize Index API (DB) early, but tolerate failures.
+    index_api = None
+    try:
+        index_api = get_index_api(paths)
+    except Exception as e:
+        # Non-fatal: log and continue. capture will fallback to JSONL-only behavior if needed.
+        try:
+            logger.exception("index_api_init_failed")
+        except Exception:
+            print("index_api_init_failed:", e)
+        index_api = None
+
     parser = argparse.ArgumentParser(prog="DailySelfie")
-    parser.add_argument("--show-paths", action="store_true")
-    parser.add_argument("--create-venv", action="store_true")
-    parser.add_argument("--list-cameras", action="store_true")
-    parser.add_argument("--capture", action="store_true")
+    parser.add_argument("--show-paths", action="store_true", help="shows the path where files are stored")
+    parser.add_argument("--create-venv", action="store_true", help="allows to create venv, install packages. and setup folders")
+    parser.add_argument("--list-cameras", action="store_true", help="lists available cameras")
+    parser.add_argument("--capture", action="store_true", help="captures image")
     parser.add_argument("--allow-retake", action="store_true", help="Allow retaking a photo even if one exists for today")
-    parser.add_argument("--delete-last", action="store_true")
-    parser.add_argument("--tail-logs", type=int, nargs="?", const=20)
-    parser.add_argument("--camera-index", type=int, default=0)
-    parser.add_argument("--width", type=int)
-    parser.add_argument("--height", type=int)
-    parser.add_argument("--quality", type=int, default=90)
+    parser.add_argument("--delete-last", action="store_true", help="deletes last taken image")
+    parser.add_argument("--tail-logs", type=int, nargs="?", const=20, help="shows log")
+    parser.add_argument("--camera-index", type=int, default=0,help="can be used with --capture")
+    parser.add_argument("--width", type=int, help="can be used with --capture")
+    parser.add_argument("--height", type=int, help="can be used with --capture")
+    parser.add_argument("--quality", type=int, default=90, help="can be used with --capture")
+    # index CLI helpers
+    parser.add_argument("--migrate-index", action="store_true", help="Migrate existing captures.jsonl into SQLite index.db (one-time)")
+    parser.add_argument("--index-info", action="store_true", help="Print index DB info and exit")
     args = parser.parse_args(argv)
+
+    # Handle index CLI operations early
+    if getattr(args, "index_info", False):
+        try:
+            if index_api is None:
+                index_api = get_index_api(paths)
+            idx = index_api._ensure_indexer()
+            print("DB path:", idx.db_path)
+            print("Total rows:", idx.count_rows())
+        except Exception as e:
+            print("Failed to open index DB:", e)
+        return 0
+
+    if getattr(args, "migrate_index", False):
+        try:
+            if index_api is None:
+                index_api = get_index_api(paths)
+            imported = index_api.migrate_if_needed()
+            print(f"Imported {imported} rows into index DB")
+        except Exception as e:
+            print("Migration failed:", e)
+        return 0
 
     if args.show_paths:
         return cmd_show_paths(paths) or 0
