@@ -20,6 +20,17 @@ import platform
 from typing import Optional, Dict, Tuple
 
 
+# Silence OpenCV V4L2 warnings globally
+try:
+    import cv2
+    try:
+        cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
+    except Exception:
+        cv2.setLogLevel(3)
+except Exception:
+    pass
+
+
 @dataclass
 class CameraResult:
     index: int
@@ -48,6 +59,8 @@ class Camera:
     def __enter__(self):
         try:
             import cv2
+
+        
         except Exception as e:
             raise RuntimeError(f"OpenCV (cv2) is required for camera operations: {e}")
 
