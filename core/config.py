@@ -165,6 +165,33 @@ def write_config(config_path: Path, cfg: Dict[str, Any]) -> None:
             pass
 
 
+def write_config_bootstrap(config_path: Path, cfg: Dict[str, Any]) -> None:
+    """
+    Bootstrap-safe config writer.
+    Uses manual TOML writing.
+    No external dependencies.
+    """
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    lines = []
+
+    for section, values in cfg.items():
+        lines.append(f"[{section}]")
+        for k, v in values.items():
+            if isinstance(v, bool):
+                v = "true" if v else "false"
+            elif v is None:
+                v = "null"
+            elif isinstance(v, (int, float)):
+                v = str(v)
+            else:
+                v = f'"{v}"'
+            lines.append(f"{k} = {v}")
+        lines.append("")
+
+    config_path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def ensure_config(config_dir: Path) -> Dict[str, Any]:
     """
     Ensure config.toml exists in config_dir.

@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 from core.venv_helper import ensure_venv
-from core.config import DEFAULT_CONFIG, write_config
+from core.config import DEFAULT_CONFIG, write_config_bootstrap
 from core.autostart_manager import set_autostart
 
 
@@ -143,7 +143,7 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
 
     # Write config
     config_path = config_dir / "config.toml"
-    write_config(config_path, cfg)
+    write_config_bootstrap(config_path, cfg)
     print(f"\nConfig written to: {config_path}")
 
     # Create venv
