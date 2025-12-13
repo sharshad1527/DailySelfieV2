@@ -13,3 +13,4 @@ pillow>=10.0.0          # image utilities if needed
 # tooling for tests / linting (dev-only)
 pytest>=8.0.0
 black
+tomli-w
