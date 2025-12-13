@@ -20,7 +20,7 @@ import sys
 import os
 from pathlib import Path
 from typing import Dict, Any
-from autostart import disable_autostart
+from core.autostart_manager import set_autostart
 
 
 def _is_safe_to_delete(path: Path) -> bool:
@@ -73,6 +73,11 @@ def run_uninstall(paths, cfg: Dict[str, Any]):
     delete_photos = False
     if photos_root.exists():
         delete_photos = _confirm(f"Do you also want to delete your photos in {photos_root}?")
+    # Remove autostart entry (cross-platform)
+    try:
+        set_autostart(False)
+    except Exception as e:
+        print(f"Failed to remove autostart: {e}")
 
     # Remove main install directory
     try:
@@ -91,11 +96,7 @@ def run_uninstall(paths, cfg: Dict[str, Any]):
     else:
         print("Photos preserved.")
 
-    # Remove autostart entry (cross-platform)
-    try:
-        set_autostart(paths, cfg, False)
-    except Exception as e:
-        print(f"Failed to remove autostart: {e}")
+    
 
     print("\n Uninstallation complete.\n")
 

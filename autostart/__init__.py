@@ -1,3 +1,4 @@
+# __init__.py AUTOSTART
 import platform
 
 def enable_autostart(paths):

@@ -156,14 +156,12 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
     else:
         print(f"Virtual environment ready: {py}")
     # -------------------------------------------------
-    # Autostart setup (OS-specific, optional)
+    # Autostart
     # -------------------------------------------------
     if inst.get("autostart"):
         print("\nConfig requests autostart. Enabling...")
         try:
-            set_autostart(paths, cfg, True)
-
-            enable_autostart(paths)
+            set_autostart(True)
         except Exception as e:
             print(f"Failed to enable autostart: {e}")
     else:

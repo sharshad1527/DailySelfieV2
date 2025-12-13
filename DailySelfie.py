@@ -126,7 +126,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     # -------------------------------------------------
-    # INSTALL / UNINSTALL
+    # INSTALL
     # -------------------------------------------------
     if args.install:
         from core.installer import run_install
@@ -134,10 +134,7 @@ def main(argv=None):
         run_install(bootstrap_paths.config_dir, requirements_path=req)
         return 0
 
-    if args.uninstall:
-        from core.uninstaller import run_uninstall
-        run_uninstall(paths, cfg)
-        return 0
+    
 
     # 2. Load config ONLY from OS config dir
     config_path = bootstrap_paths.config_dir / "config.toml"
@@ -198,8 +195,7 @@ def main(argv=None):
 
     if args.enable_autostart:
         try:
-            set_autostart(paths, cfg, True)
-            print("Autostart enabled.")
+            set_autostart(True)
         except Exception as e:
             print("Failed to enable autostart:", e)
             return 1
@@ -207,13 +203,18 @@ def main(argv=None):
 
     if args.disable_autostart:
         try:
-            set_autostart(paths, cfg, False)
+            set_autostart(False)
         except Exception as e:
             print("Failed to disable autostart:", e)
             return 1
         return 0
-
-
+    # -------------------------------------------------
+    # UNINSTALL
+    # -------------------------------------------------
+    if args.uninstall:
+        from core.uninstaller import run_uninstall
+        run_uninstall(paths, cfg)
+        return 0
     # -------------------------------------------------
     # CLI COMMANDS
     # -------------------------------------------------
