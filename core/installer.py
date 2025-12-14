@@ -1,4 +1,3 @@
-# core/installer.py
 """
 Interactive installer for DailySelfie.
 
@@ -11,7 +10,7 @@ Responsibilities:
 This module:
 - IS interactive
 - MUST NOT launch GUI
-- MUST NOT register autostart (only record preference)
+- MUST NOT register autostart directly (only records preference)
 """
 from __future__ import annotations
 
@@ -21,6 +20,7 @@ from pathlib import Path
 from core.venv_helper import ensure_venv
 from core.config import DEFAULT_CONFIG, write_config_bootstrap
 from core.autostart_manager import set_autostart
+from core.spinner import Spinner
 
 
 # ---------------------------------------------------------
@@ -82,17 +82,16 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
     print(f" One photo/day     : {beh['one_photo_per_day']}")
     print(f" Allow retake      : {beh['allow_retake']}")
     print(f" Audit enabled     : {beh['audit_enabled']}")
+    print(f" Autostart         : {inst['autostart']}")
     print()
 
     if _prompt_bool("Do you want to change any of these settings?", False):
-        # Installation paths
         inst["install_dir"] = _prompt_path("Install directory", inst["install_dir"])
         inst["venv_dir"] = str(Path(inst["install_dir"]) / "venv")
         inst["data_dir"] = str(Path(inst["install_dir"]) / "data")
         inst["photos_root"] = str(Path(inst["install_dir"]) / "photos")
         inst["logs_dir"] = str(Path(inst["install_dir"]) / "logs")
 
-        # Behavior
         beh["camera_index"] = _prompt_int("Camera index", beh["camera_index"])
         beh["width"] = _prompt_int("Camera width (0 = default)", beh["width"], allow_empty=True)
         beh["height"] = _prompt_int("Camera height (0 = default)", beh["height"], allow_empty=True)
@@ -107,11 +106,6 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
     print(f" Photos directory  : {inst['photos_root']}")
     print(f" Logs directory    : {inst['logs_dir']}")
     print()
-    print(f" Camera index      : {beh['camera_index']}")
-    print(f" Resolution        : {beh['width']} x {beh['height']}")
-    print(f" Image format      : {beh['image_format']}")
-    print(f" JPEG quality      : {beh['quality']}")
-    print()
     print(f" Autostart         : {inst['autostart']}")
     print()
 
@@ -120,9 +114,9 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
         sys.exit(0)
 
     # -------------------------------------------------
-    # Perform installation
+    # Create directories
     # -------------------------------------------------
-    print("\nInstalling...\n")
+    print("\nCreating directories...\n")
 
     created_dirs = []
     for p in (
@@ -137,55 +131,55 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
         path_obj.mkdir(parents=True, exist_ok=True)
         created_dirs.append(str(path_obj))
 
-    print("Created directories:")
     for d in created_dirs:
-        print(f"  - {d}")
+        print(f"  ✓ {d}")
 
+    # -------------------------------------------------
     # Write config
+    # -------------------------------------------------
     config_path = config_dir / "config.toml"
     write_config_bootstrap(config_path, cfg)
     print(f"\nConfig written to: {config_path}")
 
-    # Create venv
-    print("\nCreating virtual environment and installing packages...\n")
-    ok, msg, py = ensure_venv(Path(inst["venv_dir"]), requirements=requirements_path)
+    # -------------------------------------------------
+    # Venv + pip (spinner + quiet)
+    # -------------------------------------------------
+    print()
+    with Spinner("Setting up virtual environment"):
+        ok, msg, py = ensure_venv(
+            Path(inst["venv_dir"]),
+            requirements=requirements_path,
+            quiet=True,  # this removes pip spam
+        )
 
     if not ok:
-        print(" Venv creation failed:", msg)
+        print(f"\nInstallation failed: {msg}")
         sys.exit(1)
-    else:
-        print(f"Virtual environment ready: {py}")
+
+    print(f"Virtual environment ready: {py}")
+
     # -------------------------------------------------
-    # Autostart
+    # Autostart (single call)
     # -------------------------------------------------
     if inst.get("autostart"):
-        print("\nConfig requests autostart. Enabling...")
+        print("\nEnabling autostart...")
         try:
             set_autostart(True)
         except Exception as e:
-            print(f"Failed to enable autostart: {e}")
+            print(f"Autostart failed: {e}")
     else:
         print("\nAutostart disabled by user choice.")
 
-    # Show installed packages if pip was called
-    try:
-        import subprocess
-        print("\nInstalled packages:")
-        subprocess.run(
-            [str(py), "-m", "pip", "list"],
-            check=False
-        )
-    except Exception:
-        print("(could not display installed packages)")
-
+    # -------------------------------------------------
+    # Done
+    # -------------------------------------------------
     print("\nInstallation complete.")
     print("You can now run:")
     print(f"{py} DailySelfie.py --start-up\n")
 
 
-
 # ---------------------------------------------------------
-# Manual test entry
+# Manual test
 # ---------------------------------------------------------
 if __name__ == "__main__":
     from core.paths import get_app_paths

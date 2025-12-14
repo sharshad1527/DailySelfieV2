@@ -19,7 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from core.paths import get_app_paths
-from core.config import load_config, write_config, apply_config_to_paths
+from core.config import load_config, write_config, apply_config_to_paths, write_config_bootstrap
 from autostart import enable_autostart, disable_autostart
 
 
@@ -53,7 +53,15 @@ def set_autostart(enabled: bool) -> None:
         cfg["installation"]["autostart"] = False
 
     # Persist config
-    write_config(config_path, cfg)
+    try:
+        write_config(config_path, cfg)
+    except Exception as e:
+        print("Trying Again To Wrtie config")
+    else:
+        write_config_bootstrap(config_path, cfg)
+    
+    
+    
 
     state = "enabled" if enabled else "disabled"
     print(f"Autostart {state} and configuration updated.")

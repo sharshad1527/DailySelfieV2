@@ -1,5 +1,6 @@
 # core runtime dependencies for DailySelfie
 opencv-python>=4.8.0
+tomli-w
 
 # optional / useful in dev (uncomment if you need)
 # numpy is pulled in by opencv but you can pin it explicitly
@@ -13,4 +14,3 @@ pillow>=10.0.0          # image utilities if needed
 # tooling for tests / linting (dev-only)
 pytest>=8.0.0
 black
-tomli-w

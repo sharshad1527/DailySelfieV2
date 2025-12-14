@@ -10,7 +10,7 @@ Responsibilities:
 
 Design principles:
 - Fail loudly.
-- Stream output live for installers.
+- Quiet mode for spinners (suppresses pip spam).
 - Return structured results.
 - Never activate venvs in-process.
 """
@@ -42,18 +42,20 @@ def venv_python(venv_dir: Path) -> Path:
 def create_venv(venv_dir: Path) -> Tuple[bool, str]:
     """Create a venv. Return (success, message)."""
     try:
-        print(f"{_pfx('venv')} Creating virtual environment at {venv_dir}")
+        print(f"\n{_pfx('venv')} Creating virtual environment at {venv_dir}")
         builder = venv.EnvBuilder(with_pip=True, clear=False)
         builder.create(str(venv_dir))
-        print(f"{_pfx('venv')} Virtual environment created")
+        print(f"\n{_pfx('venv')} Virtual environment created")
         return True, f"venv created at {venv_dir}"
     except Exception as e:
-        print(f"{_pfx('error')} venv creation failed")
+        print(f"\n{_pfx('error')} venv creation failed")
         return False, f"venv creation failed: {e}"
 
 
-def pip_install(python_exe: Path, requirements: Path) -> Tuple[bool, str]:
-    """Install dependencies via pip in the venv (LIVE output)."""
+def pip_install(python_exe: Path, requirements: Path, *, quiet: bool = False) -> Tuple[bool, str]:
+    """Install dependencies via pip in the venv.
+    If quiet=True → suppresses pip spam (for spinner use).
+    """
     if not python_exe.exists():
         return False, f"python not found in venv: {python_exe}"
     if not requirements.exists():
@@ -61,27 +63,38 @@ def pip_install(python_exe: Path, requirements: Path) -> Tuple[bool, str]:
 
     cmd = [str(python_exe), "-m", "pip", "install", "-r", str(requirements)]
 
-    print(f"{_pfx('pip')} Installing packages from {requirements}")
+    print(f"\n{_pfx('pip')} Installing dependencies...")
     try:
-        proc = subprocess.run(cmd)  # 🔥 LIVE OUTPUT
+        if quiet:
+            proc = subprocess.run(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
+            )
+        else:
+            proc = subprocess.run(cmd)
+
         if proc.returncode == 0:
-            print(f"{_pfx('pip')} Packages installed successfully")
+            if not quiet:
+                print(f"\n{_pfx('pip')} Packages installed successfully")
             return True, "requirements installed"
         else:
-            return False, f"pip install failed with code {proc.returncode}"
+            msg = proc.stderr.strip() or "Unknown pip failure"
+            return False, f"pip install failed ({proc.returncode}): {msg}"
     except Exception as e:
         return False, f"pip install error: {e}"
 
 
-def pip_run(python_exe: Path, args: list[str]) -> Tuple[bool, str]:
-    """Run an arbitrary pip command inside the venv (LIVE)."""
+def pip_run(python_exe: Path, args: list[str], *, quiet: bool = False) -> Tuple[bool, str]:
+    """Run arbitrary pip command inside venv."""
     if not python_exe.exists():
         return False, f"python not found: {python_exe}"
 
     cmd = [str(python_exe), "-m", "pip"] + args
-    print(f"{_pfx('pip')} Running: pip {' '.join(args)}")
+    print(f"{_pfx('pip')} Running pip {' '.join(args)}")
     try:
-        proc = subprocess.run(cmd)
+        if quiet:
+            proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        else:
+            proc = subprocess.run(cmd)
         if proc.returncode == 0:
             return True, "pip command successful"
         return False, f"pip command failed with code {proc.returncode}"
@@ -96,7 +109,8 @@ def pip_run(python_exe: Path, args: list[str]) -> Tuple[bool, str]:
 def ensure_venv(
     venv_dir: Path,
     *,
-    requirements: Optional[Path] = None
+    requirements: Optional[Path] = None,
+    quiet: bool = False
 ) -> Tuple[bool, str, Optional[Path]]:
     """
     Ensure a fully-initialized venv exists.
@@ -108,9 +122,8 @@ def ensure_venv(
 
     # Existing venv
     if py.exists():
-        print(f"{_pfx('venv')} Existing venv detected")
         if requirements:
-            ok, msg = pip_install(py, requirements)
+            ok, msg = pip_install(py, requirements, quiet=quiet)
             return ok, msg, py
         return True, "venv already exists", py
 
@@ -123,13 +136,17 @@ def ensure_venv(
     if not py.exists():
         return False, "venv python missing after creation", None
 
-    # Upgrade pip (important)
-    print(f"{_pfx('pip')} Upgrading pip")
-    subprocess.run([str(py), "-m", "pip", "install", "--upgrade", "pip"])
+    # Upgrade pip
+    print(f"{_pfx('pip')} Upgrading pip...")
+    subprocess.run(
+        [str(py), "-m", "pip", "install", "--upgrade", "pip"],
+        stdout=subprocess.DEVNULL if quiet else None,
+        stderr=subprocess.DEVNULL if quiet else None,
+    )
 
     # Install requirements
     if requirements:
-        ok, msg = pip_install(py, requirements)
+        ok, msg = pip_install(py, requirements, quiet=quiet)
         return ok, msg, py
 
     return True, "venv created", py
@@ -139,12 +156,11 @@ def ensure_venv(
 # Smoke test
 # -------------------------------------------------------------
 if __name__ == "__main__":
-    import tempfile
-    import shutil
+    import tempfile, shutil
 
     tmp = Path(tempfile.gettempdir()) / "ds_test_venv"
     if tmp.exists():
         shutil.rmtree(tmp)
 
-    ok, msg, py = ensure_venv(tmp)
+    ok, msg, py = ensure_venv(tmp, quiet=True)
     print("Result:", ok, msg, py)
