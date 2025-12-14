@@ -191,7 +191,15 @@ class Indexer:
                 if report_every and (i % report_every == 0):
                     print(f"[indexer] migrated {i} lines...")
         return count
-
+    def get_latest_capture(self) -> Optional[Dict[str, Any]]:
+        """Return the most recent capture (by timestamp)."""
+        # ORDER BY ts DESC (Desending) puts the newest dates first
+        cur = self._conn.execute(
+            "SELECT * FROM captures WHERE action='capture' ORDER BY ts DESC LIMIT 1"
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+    
     def count_rows(self) -> int:
         cur = self._conn.execute("SELECT COUNT(*) as c FROM captures")
         row = cur.fetchone()

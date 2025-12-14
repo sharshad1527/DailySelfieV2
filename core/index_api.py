@@ -227,6 +227,23 @@ class IndexAPI:
         # return merged
         return self.get_item(eid)
 
+
+    def get_last_photo(self) -> Optional[Dict[str, Any]]:
+        """
+        Get the most recent photo for the 'Ghost View'.
+        Returns merged DB row + sidecar metadata.
+        """
+        idx = self._ensure_indexer()
+        row = idx.get_latest_capture()
+        if not row:
+            return None
+        
+        # Merge with sidecar data (in case they edited notes on the last photo)
+        eid = row["id"]
+        meta = read_meta(self.data_dir, eid)
+        return merge_db_and_meta(row, meta)
+
+
     def migrate_if_needed(self, jsonl_path: Optional[Path] = None) -> int:
         """
         Run migration from captures.jsonl into SQLite. If jsonl_path is None, uses the default audit in data_dir.

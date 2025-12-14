@@ -224,11 +224,12 @@ def main(argv=None):
     # Phase 6: Command Execution
     # -------------------------------------------------
     
-    # 1. Startup Mode (GUI)
+    
+    # -------------------------------------------------
+    # START UP GUI LAUNCHER 
+    # -------------------------------------------------
     if args.start_up:
-        # TODO: Launch gui/popup.py here
-        print("[TODO] Launching GUI Popup...")
-        print("Use --capture for CLI mode in the meantime.")
+        print("Manager UI not implemented yet.")
         return 0
 
     # 2. Debug Tools
