@@ -1,4 +1,5 @@
-# gui/startup/startup_window
+# gui/startup/startup_window.py
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget,
@@ -9,23 +10,34 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QButtonGroup,
 )
-
-from startup.window_con import BaseFramelessWindow
-from startup.widgets.ghost_slider import GhostOpacitySlider
+from PySide6.QtGui import QPixmap
+from gui.startup.window_con import BaseFramelessWindow
+from gui.startup.widgets.ghost_slider import GhostOpacitySlider
+from gui.startup.widgets.shutter_bar import ShutterBar
+from gui.startup.camera.preview import CameraPreviewThread
 
 
 class StartupWindow(BaseFramelessWindow):
     def __init__(self):
         super().__init__(width=1000, height=560)
+
+        # ---------- Config ----------
+        from core.config import ensure_config
+        from core.paths import get_app_paths
+
+        paths = get_app_paths("DailySelfie", ensure=True)
+        self.config = ensure_config(paths.data_dir / "config")
+
+        # Preview thread handle
+        self._preview_thread = None
+
+        # Build UI
         self._build_content_ui()
 
+    # =====================================================
+    # UI
+    # =====================================================
     def _build_content_ui(self):
-        """
-        Builds ONLY the startup layout.
-        Ghost slider is functional (value changes),
-        but no ghost image logic yet.
-        """
-
         # Root content layout (3 columns)
         root_layout = QHBoxLayout(self._content)
         root_layout.setContentsMargins(0, 0, 0, 0)
@@ -34,79 +46,35 @@ class StartupWindow(BaseFramelessWindow):
         # =========================
         # LEFT — Ghost slider
         # =========================
-        # left_panel = QWidget()
-        # left_layout = QVBoxLayout(left_panel)
-        # left_layout.setAlignment(Qt.AlignCenter)
-        # left_layout.setSpacing(8)
-
-        # ghost_label = QLabel("Ghost")
-        # ghost_label.setAlignment(Qt.AlignCenter)
-        # ghost_label.setStyleSheet("color: #B0B0B0;")
-
-        # self.ghost_slider = GhostOpacitySlider(
-        #     minimum=0,
-        #     maximum=60,
-        #     value=30,
-        # )
-
-        # # Debug: confirm it moves
-        # self.ghost_slider.valueChanged.connect(
-        #     lambda v: print(f"Ghost opacity: {v}%")
-        # )
-
-        # left_layout.addWidget(ghost_label)
-        # left_panel.setFixedWidth(100)
-        # left_layout.addWidget(self.ghost_slider, 1)
-
-        # left_panel = QWidget()
-        # left_panel.setFixedWidth(120)
-
-        # left_layout = QVBoxLayout(left_panel)
-        # left_layout.setContentsMargins(8, 0, 0, 0)
-        # left_layout.setSpacing(8)
-
-        # ghost_label = QLabel("Ghost")
-        # ghost_label.setContentsMargins(34, 0, 0, 0)
-        # ghost_label.setStyleSheet("color: #B0B0B0;")
-
-        # self.ghost_slider = GhostOpacitySlider()
-        # left_layout.addWidget(ghost_label, alignment=Qt.AlignLeft)
-        # left_layout.addWidget(self.ghost_slider, 1, alignment=Qt.AlignLeft)
-
-        # =========================
-        # LEFT — Ghost slider
-        # =========================
         left_panel = QWidget()
-        left_panel.setFixedWidth(90)  # narrower so preview gains width
+        left_panel.setFixedWidth(90)
 
         left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(2, 0, 0, 0)   # move everything left
+        left_layout.setContentsMargins(2, 0, 0, 0)
         left_layout.setSpacing(6)
 
         ghost_label = QLabel("Ghost")
-        ghost_label.setContentsMargins(34, 0, 0, 0)  # visually align with slider track
+        ghost_label.setContentsMargins(34, 0, 0, 0)
         ghost_label.setStyleSheet("color: #B0B0B0;")
 
         self.ghost_slider = GhostOpacitySlider()
+
         left_layout.addWidget(ghost_label, alignment=Qt.AlignLeft)
         left_layout.addWidget(self.ghost_slider, 1, alignment=Qt.AlignLeft)
 
-
         # =========================
-        # CENTER — Camera preview placeholder
+        # CENTER — Camera preview
         # =========================
         center_panel = QWidget()
         center_layout = QVBoxLayout(center_panel)
         center_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.preview = QLabel("Camera Preview")
+        self.preview = QLabel()
         self.preview.setAlignment(Qt.AlignCenter)
         self.preview.setStyleSheet("""
             QLabel {
                 background-color: #1A1A1A;
-                color: #666;
                 border-radius: 12px;
-                font-size: 16px;
             }
         """)
 
@@ -119,7 +87,6 @@ class StartupWindow(BaseFramelessWindow):
         right_layout = QVBoxLayout(right_panel)
         right_layout.setSpacing(12)
 
-        # Mood buttons
         mood_label = QLabel("Mood")
         mood_label.setStyleSheet("color: #B0B0B0;")
 
@@ -146,7 +113,6 @@ class StartupWindow(BaseFramelessWindow):
             self.mood_group.addButton(btn)
             mood_layout.addWidget(btn)
 
-        # Note field
         note_label = QLabel("Note (optional)")
         note_label.setStyleSheet("color: #B0B0B0;")
 
@@ -162,48 +128,65 @@ class StartupWindow(BaseFramelessWindow):
             }
         """)
 
-        # Shutter button
-        self.shutter_btn = QPushButton("●")
-        self.shutter_btn.setFixedSize(72, 72)
-        self.shutter_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #8B5CF6;
-                border-radius: 36px;
-                font-size: 28px;
-                color: white;
-            }
-            QPushButton:hover {
-                background-color: #7C3AED;
-            }
-        """)
+        self.shutter_bar = ShutterBar()
 
-        # Light toggle
-        self.light_btn = QPushButton("💡")
-        self.light_btn.setCheckable(True)
-        self.light_btn.setFixedSize(48, 48)
-        self.light_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #1F1F1F;
-                border-radius: 24px;
-                font-size: 18px;
-            }
-            QPushButton:checked {
-                background-color: #FACC15;
-            }
-        """)
-
-        # Assemble right panel
         right_layout.addWidget(mood_label)
         right_layout.addLayout(mood_layout)
         right_layout.addWidget(note_label)
         right_layout.addWidget(self.note_edit)
+        right_layout.addSpacing(128)
+        right_layout.addWidget(self.shutter_bar, alignment=Qt.AlignCenter)
         right_layout.addStretch()
-        right_layout.addWidget(self.shutter_btn, alignment=Qt.AlignCenter)
-        right_layout.addWidget(self.light_btn, alignment=Qt.AlignCenter)
 
         # =========================
-        # Add all panels to root
+        # Assemble
         # =========================
         root_layout.addWidget(left_panel, 0)
         root_layout.addWidget(center_panel, 5)
         root_layout.addWidget(right_panel, 2)
+
+    # =====================================================
+    # Camera Preview
+    # =====================================================
+    def _start_camera_preview(self):
+        if self._preview_thread:
+            return
+
+        behavior = self.config.get("behavior", {})
+
+        self._preview_thread = CameraPreviewThread(
+            camera_index=behavior.get("camera_index", 0),
+            width=behavior.get("width"),
+            height=behavior.get("height"),
+            fps=30,
+            parent=self,
+        )
+
+        self._preview_thread.frame_ready.connect(self._on_frame_ready)
+        self._preview_thread.error.connect(self._on_camera_error)
+        self._preview_thread.start()
+
+    def _on_frame_ready(self, image):
+        scaled = image.scaled(
+            self.preview.size(),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
+        pixmap = QPixmap.fromImage(scaled)
+        self.preview.setPixmap(pixmap)
+
+    def _on_camera_error(self, msg):
+        print("Camera error:", msg)
+
+    # =====================================================
+    # Lifecycle
+    # =====================================================
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._start_camera_preview()
+
+    def closeEvent(self, event):
+        if self._preview_thread:
+            self._preview_thread.stop()
+            self._preview_thread = None
+        super().closeEvent(event)

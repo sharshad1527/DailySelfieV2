@@ -229,8 +229,13 @@ def main(argv=None):
     # START UP GUI LAUNCHER 
     # -------------------------------------------------
     if args.start_up:
-        print("Manager UI not implemented yet.")
-        return 0
+        from PySide6.QtWidgets import QApplication
+        from gui.startup.startup_window import StartupWindow
+
+        app = QApplication(sys.argv)
+        win = StartupWindow()
+        win.show()
+        return app.exec()
 
     # 2. Debug Tools
     if args.show_paths:
