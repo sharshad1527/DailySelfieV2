@@ -1,3 +1,4 @@
+# core/installer.py
 """
 Interactive installer for DailySelfie.
 
@@ -15,6 +16,7 @@ This module:
 from __future__ import annotations
 
 import sys
+import copy
 from pathlib import Path
 
 from core.venv_helper import ensure_venv
@@ -57,13 +59,19 @@ def _prompt_path(question: str, default: str) -> str:
     return ans if ans else default
 
 
+def _expand(p: str) -> Path:
+    """Expand ~ and return absolute Path."""
+    return Path(p).expanduser().resolve()
+
+
 # ---------------------------------------------------------
 # Installer
 # ---------------------------------------------------------
 def run_install(config_dir: Path, requirements_path: Path | None = None) -> None:
     print("\n=== DailySelfie Interactive Installer ===\n")
 
-    cfg = DEFAULT_CONFIG.copy()
+    # IMPORTANT: deep copy
+    cfg = copy.deepcopy(DEFAULT_CONFIG)
     inst = cfg["installation"]
     beh = cfg["behavior"]
 
@@ -79,9 +87,6 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
     print(f" Image format      : {beh['image_format']}")
     print(f" JPEG quality      : {beh['quality']}")
     print()
-    print(f" One photo/day     : {beh['one_photo_per_day']}")
-    print(f" Allow retake      : {beh['allow_retake']}")
-    print(f" Audit enabled     : {beh['audit_enabled']}")
     print(f" Autostart         : {inst['autostart']}")
     print()
 
@@ -114,25 +119,32 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
         sys.exit(0)
 
     # -------------------------------------------------
+    # Expand paths ONCE (fixes ~ bug permanently)
+    # -------------------------------------------------
+    install_dir = _expand(inst["install_dir"])
+    inst["install_dir"] = str(install_dir)
+    inst["venv_dir"] = str(install_dir / "venv")
+    inst["data_dir"] = str(install_dir / "data")
+    inst["photos_root"] = str(install_dir / "photos")
+    inst["logs_dir"] = str(install_dir / "logs")
+
+    config_dir = _expand(str(config_dir))
+
+    # -------------------------------------------------
     # Create directories
     # -------------------------------------------------
     print("\nCreating directories...\n")
 
-    created_dirs = []
     for p in (
-        inst["install_dir"],
-        inst["venv_dir"],
-        inst["data_dir"],
-        inst["photos_root"],
-        inst["logs_dir"],
+        install_dir,
+        Path(inst["venv_dir"]),
+        Path(inst["data_dir"]),
+        Path(inst["photos_root"]),
+        Path(inst["logs_dir"]),
         config_dir,
     ):
-        path_obj = Path(p)
-        path_obj.mkdir(parents=True, exist_ok=True)
-        created_dirs.append(str(path_obj))
-
-    for d in created_dirs:
-        print(f"  ✓ {d}")
+        p.mkdir(parents=True, exist_ok=True)
+        print(f"  ✓ {p}")
 
     # -------------------------------------------------
     # Write config
@@ -142,7 +154,7 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
     print(f"\nConfig written to: {config_path}")
 
     # -------------------------------------------------
-    # Venv + pip (spinner + quiet)
+    # Venv + pip (spinner)
     # -------------------------------------------------
     print()
     with Spinner("Setting up virtual environment"):
