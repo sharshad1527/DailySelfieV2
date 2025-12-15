@@ -18,6 +18,7 @@ This module MUST NOT:
 from __future__ import annotations
 
 import os
+import platform
 import tempfile
 from pathlib import Path
 from typing import Dict, Any
@@ -34,15 +35,25 @@ except ModuleNotFoundError:
 
 
 # ---------------------------------------------------------
-# Default configuration (EARLY STAGE – KEEP SMALL)
+# Default configuration (OS-AWARE DEFAULTS)
 # ---------------------------------------------------------
+# Detect OS to determine the correct default root
+if platform.system().lower() == "windows":
+    # Windows: ~\AppData\Local\DailySelfie
+    _DEF_ROOT = r"~\AppData\Local\DailySelfie"
+    _SEP = "\\"
+else:
+    # Linux/Mac: ~/.local/share/DailySelfie
+    _DEF_ROOT = "~/.local/share/DailySelfie"
+    _SEP = "/"
+
 DEFAULT_CONFIG: Dict[str, Any] = {
     "installation": {
-        "install_dir": "~/.local/share/DailySelfie",
-        "venv_dir": "~/.local/share/DailySelfie/venv",
-        "data_dir": "~/.local/share/DailySelfie/data",
-        "logs_dir": "~/.local/share/DailySelfie/logs",
-        "photos_root": "~/.local/share/DailySelfie/photos",
+        "install_dir": _DEF_ROOT,
+        "venv_dir": f"{_DEF_ROOT}{_SEP}venv",
+        "data_dir": f"{_DEF_ROOT}{_SEP}data",
+        "logs_dir": f"{_DEF_ROOT}{_SEP}logs",
+        "photos_root": f"{_DEF_ROOT}{_SEP}photos",
         "create_desktop_entry": True,
         "autostart": False,
     },
@@ -188,7 +199,10 @@ def write_config_bootstrap(config_path: Path, cfg: Dict[str, Any]) -> None:
             elif isinstance(v, (int, float)):
                 v = str(v)
             else:
-                v = f'"{v}"'
+                # Escape backslashes and quotes for Windows paths
+                val_str = str(v)
+                val_str = val_str.replace("\\", "\\\\").replace('"', '\\"')
+                v = f'"{val_str}"'
             lines.append(f"{k} = {v}")
         lines.append("")
 
