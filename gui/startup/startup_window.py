@@ -1,9 +1,9 @@
-from PySide6.QtCore import Qt, QByteArray, QBuffer, QIODevice
+from PySide6.QtCore import Qt, QByteArray, QBuffer, QIODevice, QSize
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, 
     QPushButton, QTextEdit, QButtonGroup
 )
-from PySide6.QtGui import QPixmap, QImage
+from PySide6.QtGui import QPixmap, QImage, QPainter, QPainterPath
 
 from gui.startup.window_con import BaseFramelessWindow
 from gui.startup.widgets.ghost_slider import GhostOpacitySlider
@@ -15,35 +15,34 @@ class StartupWindow(BaseFramelessWindow):
     def __init__(self):
         super().__init__(width=1000, height=560)
 
-        # ---------- Paths & Config Setup (CORRECTED) ----------
+        # ---------- Paths & Config Setup ----------
         from core.config import ensure_config, apply_config_to_paths
         from core.paths import get_app_paths
         
-        # 1. Get basic OS paths (bootstrap)
+        # 1. Get basic OS paths
         bootstrap_paths = get_app_paths("DailySelfie", ensure=False)
         
         # 2. Load config
         self.config = ensure_config(bootstrap_paths.config_dir)
         
-        # 3. Apply config overrides to paths (FIXES SAVING LOCATION)
+        # 3. Apply config overrides
         self.paths = apply_config_to_paths(bootstrap_paths, self.config)
         
-        # 4. Ensure final directories exist
+        # 4. Ensure directories
         for p in (self.paths.data_dir, self.paths.photos_root, self.paths.logs_dir):
             p.mkdir(parents=True, exist_ok=True)
 
         # ---------- State ----------
-        self._current_qimage = None # Stores the frozen frame
+        self._current_qimage = None 
         self._preview_thread = None
         
         # ---------- UI ----------
         self._build_content_ui()
         
-        # Wire Shutter Bar Signals
+        # Wire Shutter Bar
         self.shutter_bar.shutterClicked.connect(self._on_shutter)
         self.shutter_bar.saveClicked.connect(self._on_save)
         self.shutter_bar.retakeClicked.connect(self._on_retake)
-        # self.shutter_bar.lightToggled.connect(self._toggle_screen_flash) # Optional feature
 
     def _build_content_ui(self):
         root = QHBoxLayout(self._content)
@@ -67,7 +66,8 @@ class StartupWindow(BaseFramelessWindow):
         
         self.preview_lbl = QLabel()
         self.preview_lbl.setAlignment(Qt.AlignCenter)
-        self.preview_lbl.setStyleSheet("background-color: #1A1A1A; border-radius: 12px;")
+        # The background color here acts as the "Border"
+        self.preview_lbl.setStyleSheet("background-color: #333333; border-radius: 16px;")
         center_layout.addWidget(self.preview_lbl, 1)
 
         # --- RIGHT (Controls) ---
@@ -96,7 +96,10 @@ class StartupWindow(BaseFramelessWindow):
         right_layout.addLayout(moods_lo)
         right_layout.addWidget(QLabel("Note", styleSheet="color:#B0B0B0"))
         right_layout.addWidget(self.note_edit)
-        right_layout.addSpacing(64)
+        
+        # [MODIFIED] Increased spacing to push shutter bar lower
+        right_layout.addSpacing(140) 
+        
         right_layout.addWidget(self.shutter_bar, alignment=Qt.AlignCenter)
         right_layout.addStretch()
 
@@ -105,7 +108,7 @@ class StartupWindow(BaseFramelessWindow):
         root.addWidget(right, 2)
 
     # ----------------------------------------------------
-    # Camera Management
+    # Camera Logic
     # ----------------------------------------------------
     def showEvent(self, event):
         super().showEvent(event)
@@ -134,49 +137,81 @@ class StartupWindow(BaseFramelessWindow):
             self._preview_thread = None
 
     def _update_preview(self, qimg):
-        # Always keep the latest frame in memory
-        self._current_qimage = qimg
+        """
+        Processes the frame:
+        1. Calculate inset area (to create border)
+        2. Scale video to fill that inset area
+        3. Round corners
+        """
+        self._current_qimage = qimg 
         
-        # Display it
+        # Safety check
+        if self.preview_lbl.width() <= 0 or self.preview_lbl.height() <= 0:
+            return
+
+        # [MODIFIED] Define margin for the border effect
+        margin = 8
+        target_w = self.preview_lbl.width() - (margin * 2)
+        target_h = self.preview_lbl.height() - (margin * 2)
+
+        if target_w <= 0 or target_h <= 0: return
+
+        # 1. Scale to fill the TARGET area
         pix = QPixmap.fromImage(qimg)
         scaled = pix.scaled(
-            self.preview_lbl.size(), 
-            Qt.KeepAspectRatio, 
+            QSize(target_w, target_h),
+            Qt.KeepAspectRatioByExpanding, 
             Qt.SmoothTransformation
         )
-        self.preview_lbl.setPixmap(scaled)
+        
+        # 2. Center-Crop to exact target size
+        crop_x = (scaled.width() - target_w) // 2
+        crop_y = (scaled.height() - target_h) // 2
+        cropped = scaled.copy(crop_x, crop_y, target_w, target_h)
+
+        # 3. Create the final canvas (Full Label Size)
+        # We start with transparent so the label's background color shows through
+        final_pix = QPixmap(self.preview_lbl.size())
+        final_pix.fill(Qt.transparent)
+
+        painter = QPainter(final_pix)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # 4. Draw Rounded Image inside the margin
+        path = QPainterPath()
+        # Radius 12px for the image itself
+        path.addRoundedRect(
+            margin, margin, 
+            target_w, target_h, 
+            12, 12 
+        )
+        
+        painter.setClipPath(path)
+        painter.drawPixmap(margin, margin, cropped)
+        painter.end()
+        
+        self.preview_lbl.setPixmap(final_pix)
 
     # ----------------------------------------------------
     # Capture Workflow
     # ----------------------------------------------------
     def _on_shutter(self):
-        """Freeze the preview and enter review mode."""
-        if not self._current_qimage:
-            print("No frame available to capture.")
-            return
-
-        # 1. Stop streaming (Visual Freeze)
+        if not self._current_qimage: return
         self._stop_preview()
-        
-        # 2. Update UI for Review
         self.shutter_bar.setReviewMode(True)
         self.ghost_slider.setEnabled(False) 
         self.ghost_slider.setStyleSheet("opacity: 0.3;")
 
     def _on_retake(self):
-        """Discard frozen frame and resume preview."""
         self.shutter_bar.setReviewMode(False)
         self.ghost_slider.setEnabled(True)
         self.ghost_slider.setStyleSheet("")
-        
         self._current_qimage = None
         self._start_preview()
 
     def _on_save(self):
-        """Commit the frozen frame to disk."""
         if not self._current_qimage: return
 
-        # 1. Prepare Bytes
         byte_array = QByteArray()
         buffer = QBuffer(byte_array)
         buffer.open(QIODevice.WriteOnly)
@@ -185,7 +220,6 @@ class StartupWindow(BaseFramelessWindow):
         self._current_qimage.save(buffer, "JPG", quality)
         jpg_data = byte_array.data()
 
-        # 2. Extract Metadata
         selected_mood = None
         if self.mood_group.checkedButton():
             selected_mood = self.mood_group.checkedButton().text()
@@ -193,7 +227,6 @@ class StartupWindow(BaseFramelessWindow):
         raw_note = self.note_edit.toPlainText().strip()
         selected_note = raw_note if raw_note else None
 
-        # 3. Commit (Uses path with config applied)
         beh = self.config.get("behavior", {})
         result = commit_capture_from_bytes(
             self.paths,
