@@ -11,41 +11,43 @@ from PySide6.QtWidgets import (
     QButtonGroup,
 )
 from PySide6.QtGui import QPixmap
+
 from gui.startup.window_con import BaseFramelessWindow
 from gui.startup.widgets.ghost_slider import GhostOpacitySlider
 from gui.startup.widgets.shutter_bar import ShutterBar
-from gui.startup.camera.preview import CameraPreviewThread
+
+# [REMOVED] CameraPreviewThread import is no longer needed
+# from gui.startup.camera.preview import CameraPreviewThread
 
 
 class StartupWindow(BaseFramelessWindow):
     def __init__(self):
         super().__init__(width=1000, height=560)
 
-        # ---------- Config ----------
+        # ---------- Paths & Config ----------
         from core.config import ensure_config
         from core.paths import get_app_paths
 
-        paths = get_app_paths("DailySelfie", ensure=True)
-        self.config = ensure_config(paths.data_dir / "config")
+        self.paths = get_app_paths("DailySelfie", ensure=True)
+        self.config = ensure_config(self.paths.data_dir / "config")
 
-        # Preview thread handle
-        self._preview_thread = None
+        # [REMOVED] _preview_thread initialization
 
         # Build UI
         self._build_content_ui()
+
+        # 🔗 Wire shutter
+        self.shutter_bar.shutterClicked.connect(self._on_shutter_clicked)
 
     # =====================================================
     # UI
     # =====================================================
     def _build_content_ui(self):
-        # Root content layout (3 columns)
         root_layout = QHBoxLayout(self._content)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(16)
 
-        # =========================
-        # LEFT — Ghost slider
-        # =========================
+        # ---------- LEFT (Ghost slider) ----------
         left_panel = QWidget()
         left_panel.setFixedWidth(90)
 
@@ -62,27 +64,27 @@ class StartupWindow(BaseFramelessWindow):
         left_layout.addWidget(ghost_label, alignment=Qt.AlignLeft)
         left_layout.addWidget(self.ghost_slider, 1, alignment=Qt.AlignLeft)
 
-        # =========================
-        # CENTER — Camera preview
-        # =========================
+        # ---------- CENTER (Preview Placeholder) ----------
         center_panel = QWidget()
         center_layout = QVBoxLayout(center_panel)
         center_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.preview = QLabel()
+        # [MODIFIED] Placeholder text instead of video feed container
+        self.preview = QLabel("Camera Preview\n(Placeholder)")
         self.preview.setAlignment(Qt.AlignCenter)
         self.preview.setStyleSheet("""
             QLabel {
                 background-color: #1A1A1A;
                 border-radius: 12px;
+                color: #555555;
+                font-size: 18px;
+                font-weight: bold;
             }
         """)
 
         center_layout.addWidget(self.preview, 1)
 
-        # =========================
-        # RIGHT — Mood / Note / Controls
-        # =========================
+        # ---------- RIGHT (Controls) ----------
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setSpacing(12)
@@ -94,9 +96,7 @@ class StartupWindow(BaseFramelessWindow):
         self.mood_group.setExclusive(True)
 
         mood_layout = QHBoxLayout()
-        moods = ["😀", "🙂", "😐", "😔", "😢"]
-
-        for m in moods:
+        for m in ["😀", "🙂", "😐", "😔", "😢"]:
             btn = QPushButton(m)
             btn.setCheckable(True)
             btn.setFixedSize(40, 40)
@@ -138,55 +138,26 @@ class StartupWindow(BaseFramelessWindow):
         right_layout.addWidget(self.shutter_bar, alignment=Qt.AlignCenter)
         right_layout.addStretch()
 
-        # =========================
-        # Assemble
-        # =========================
+        # ---------- Assemble ----------
         root_layout.addWidget(left_panel, 0)
         root_layout.addWidget(center_panel, 5)
         root_layout.addWidget(right_panel, 2)
 
     # =====================================================
-    # Camera Preview
+    # [REMOVED] Camera Preview Methods
     # =====================================================
-    def _start_camera_preview(self):
-        if self._preview_thread:
-            return
+    # _start_camera_preview, _stop_camera_preview, 
+    # _on_frame_ready, and _on_camera_error have been removed.
 
-        behavior = self.config.get("behavior", {})
-
-        self._preview_thread = CameraPreviewThread(
-            camera_index=behavior.get("camera_index", 0),
-            width=behavior.get("width"),
-            height=behavior.get("height"),
-            fps=30,
-            parent=self,
-        )
-
-        self._preview_thread.frame_ready.connect(self._on_frame_ready)
-        self._preview_thread.error.connect(self._on_camera_error)
-        self._preview_thread.start()
-
-    def _on_frame_ready(self, image):
-        scaled = image.scaled(
-            self.preview.size(),
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
-        )
-        pixmap = QPixmap.fromImage(scaled)
-        self.preview.setPixmap(pixmap)
-
-    def _on_camera_error(self, msg):
-        print("Camera error:", msg)
+    # =====================================================
+    # Shutter logic
+    # =====================================================
+    def _on_shutter_clicked(self):
+        # [MODIFIED] Capture logic disabled
+        print("Shutter clicked (Capture function is currently disabled)")
 
     # =====================================================
     # Lifecycle
     # =====================================================
-    def showEvent(self, event):
-        super().showEvent(event)
-        self._start_camera_preview()
-
-    def closeEvent(self, event):
-        if self._preview_thread:
-            self._preview_thread.stop()
-            self._preview_thread = None
-        super().closeEvent(event)
+    # [REMOVED] showEvent and closeEvent no longer needed for thread management
+    # unless you have other lifecycle logic to add.

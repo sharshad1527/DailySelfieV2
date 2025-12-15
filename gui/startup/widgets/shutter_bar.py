@@ -1,9 +1,12 @@
-from PySide6.QtCore import Qt, QRect, QSize
+from PySide6.QtCore import Qt, QRect, QSize, Signal
 from PySide6.QtWidgets import QWidget, QPushButton
 from PySide6.QtGui import QPainter, QColor, QIcon
 
 
 class ShutterBar(QWidget):
+    # ---------- Public signals ----------
+    shutterClicked = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -54,7 +57,7 @@ class ShutterBar(QWidget):
         shutter_x = 12 + 36 + gap
         shutter_width = self.width() - shutter_x - 12
 
-        # Shutter pill (slightly smaller, properly spaced)
+        # Shutter pill (properly spaced)
         self.shutter_rect = QRect(
             shutter_x,
             12,
@@ -62,7 +65,7 @@ class ShutterBar(QWidget):
             h - 24,
         )
 
-    # Shutter button matches segment exactly
+        # Shutter button matches painted segment
         self.shutter_btn.setGeometry(self.shutter_rect)
 
     def resizeEvent(self, event):
@@ -78,12 +81,8 @@ class ShutterBar(QWidget):
         p.setBrush(QColor("#161616"))
         p.drawRoundedRect(self.rect(), 34, 34)
 
-        # Shutter segment (color changes on press)
-        if self._shutter_pressed:
-            shutter_color = QColor("#6D28D9")  # darker purple
-        else:
-            shutter_color = QColor("#8B5CF6")
-
+        # Shutter segment
+        shutter_color = QColor("#6D28D9") if self._shutter_pressed else QColor("#8B5CF6")
         p.setBrush(shutter_color)
         p.drawRoundedRect(
             self.shutter_rect,
@@ -91,7 +90,7 @@ class ShutterBar(QWidget):
             self.shutter_rect.height() // 2,
         )
 
-        # Light glow (subtle, warm)
+        # Light glow (subtle)
         if self.light_btn.isChecked():
             glow_rect = self.light_btn.geometry().adjusted(-6, -6, 6, 6)
             p.setBrush(QColor(0, 0, 0, 93))
@@ -105,3 +104,6 @@ class ShutterBar(QWidget):
     def _on_shutter_release(self):
         self._shutter_pressed = False
         self.update()
+
+        # Notify GUI that shutter was clicked
+        self.shutterClicked.emit()
