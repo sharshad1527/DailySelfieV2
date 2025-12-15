@@ -61,6 +61,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "audit_enabled": True,
         "one_photo_per_day": True,
         "allow_retake": True,
+
+        # Default timer is 0 (Off)
+        "timer_duration": 0
     },
 }
 

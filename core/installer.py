@@ -86,6 +86,7 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
     print(f" Resolution        : {beh['width']} x {beh['height']}")
     print(f" Image format      : {beh['image_format']}")
     print(f" JPEG quality      : {beh['quality']}")
+    print(f" Timer duration    : {beh.get('timer_duration', 0)}s")
     print()
     print(f" Autostart         : {inst['autostart']}")
     print()
