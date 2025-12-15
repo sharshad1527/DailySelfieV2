@@ -1,7 +1,7 @@
-from PySide6.QtCore import Qt, QByteArray, QBuffer, QIODevice, QSize, QTimer
+from PySide6.QtCore import Qt, QByteArray, QBuffer, QIODevice, QSize, QTimer, QEvent
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, 
-    QPushButton, QTextEdit, QButtonGroup
+    QPushButton, QTextEdit, QButtonGroup, QGridLayout
 )
 from PySide6.QtGui import QPixmap, QImage, QPainter, QPainterPath, QFont
 
@@ -22,11 +22,9 @@ class StartupWindow(BaseFramelessWindow):
         bootstrap_paths = get_app_paths("DailySelfie", ensure=False)
         self.config_path = bootstrap_paths.config_dir / "config.toml"
         
-        # Load Config
         self.config = ensure_config(bootstrap_paths.config_dir)
         self.paths = apply_config_to_paths(bootstrap_paths, self.config)
         
-        # Ensure directories
         for p in (self.paths.data_dir, self.paths.photos_root, self.paths.logs_dir):
             p.mkdir(parents=True, exist_ok=True)
 
@@ -34,10 +32,8 @@ class StartupWindow(BaseFramelessWindow):
         self._current_qimage = None 
         self._preview_thread = None
         
-        # Get last saved timer value (default 0)
         initial_timer = self.config.get("behavior", {}).get("timer_duration", 0)
         
-        # Countdown State
         self._countdown_timer = QTimer(self)
         self._countdown_timer.timeout.connect(self._on_countdown_tick)
         self._countdown_remaining = 0
@@ -45,10 +41,20 @@ class StartupWindow(BaseFramelessWindow):
         # ---------- UI ----------
         self._build_content_ui(initial_timer)
         
+        # [NEW] Flash Overlay (Hidden by default)
+        self.flash_overlay = QWidget(self)
+        self.flash_overlay.setStyleSheet("background-color: white;")
+        self.flash_overlay.hide()
+        # Ensure mouse events pass through (though it only appears briefly)
+        self.flash_overlay.setAttribute(Qt.WA_TransparentForMouseEvents)
+
         # Signals
         self.shutter_bar.shutterClicked.connect(self._on_shutter_clicked)
         self.shutter_bar.saveClicked.connect(self._on_save)
         self.shutter_bar.retakeClicked.connect(self._on_retake)
+        
+        self.shutter_bar.hoverStatus.connect(self._update_toast)
+        self.ghost_slider.hoverStatus.connect(self._update_toast)
 
     def _build_content_ui(self, initial_timer):
         root = QHBoxLayout(self._content)
@@ -70,26 +76,20 @@ class StartupWindow(BaseFramelessWindow):
         center_layout = QVBoxLayout(center)
         center_layout.setContentsMargins(0,0,0,0)
         
-        # Container for stacking overlay
         self.preview_container = QWidget()
-        # We use a grid layout to stack widgets on top of each other
-        from PySide6.QtWidgets import QGridLayout
         stack_layout = QGridLayout(self.preview_container)
         stack_layout.setContentsMargins(0,0,0,0)
 
-        # 1. The Camera View
         self.preview_lbl = QLabel()
         self.preview_lbl.setAlignment(Qt.AlignCenter)
         self.preview_lbl.setStyleSheet("background-color: #333333; border-radius: 16px;")
         
-        # 2. The Countdown Overlay (Hidden by default)
         self.countdown_lbl = QLabel("")
         self.countdown_lbl.setAlignment(Qt.AlignCenter)
         self.countdown_lbl.setStyleSheet("background: transparent; color: white; font-weight: bold;")
         self.countdown_lbl.setFont(QFont("Arial", 96))
         self.countdown_lbl.hide()
 
-        # Add both to same cell (0,0) to stack them
         stack_layout.addWidget(self.preview_lbl, 0, 0)
         stack_layout.addWidget(self.countdown_lbl, 0, 0)
 
@@ -101,11 +101,22 @@ class StartupWindow(BaseFramelessWindow):
         
         self.mood_group = QButtonGroup(self)
         moods_lo = QHBoxLayout()
-        for m in ["😀", "🙂", "😐", "😔", "😢"]:
-            b = QPushButton(m)
+        
+        mood_data = [
+            ("😀", "Great"), 
+            ("🙂", "Good"), 
+            ("😐", "Neutral"), 
+            ("😔", "Bad"), 
+            ("😢", "Awful")
+        ]
+
+        for icon_char, desc in mood_data:
+            b = QPushButton(icon_char)
             b.setCheckable(True)
             b.setFixedSize(40,40)
             b.setStyleSheet("QPushButton{background:#1F1F1F; border-radius:20px; font-size:18px;} QPushButton:checked{background:#8B5CF6;}")
+            b.setProperty("toast_text", desc)
+            b.installEventFilter(self)
             self.mood_group.addButton(b)
             moods_lo.addWidget(b)
             
@@ -114,20 +125,57 @@ class StartupWindow(BaseFramelessWindow):
         self.note_edit.setFixedHeight(100)
         self.note_edit.setStyleSheet("background:#1A1A1A; border-radius:8px; padding:8px; color:#E0E0E0;")
         
-        # Pass initial timer to bar
+        self.toast_msg = QLabel("")
+        self.toast_msg.setAlignment(Qt.AlignCenter)
+        self.toast_msg.setFixedHeight(30)
+        self.toast_msg.setStyleSheet("background: transparent; color: transparent;")
+
         self.shutter_bar = ShutterBar(initial_timer=initial_timer)
 
         right_layout.addWidget(QLabel("Mood", styleSheet="color:#B0B0B0"))
         right_layout.addLayout(moods_lo)
         right_layout.addWidget(QLabel("Note", styleSheet="color:#B0B0B0"))
         right_layout.addWidget(self.note_edit)
-        right_layout.addSpacing(120)
+        
+        right_layout.addSpacing(80) 
+        right_layout.addWidget(self.toast_msg, alignment=Qt.AlignCenter)
+        right_layout.addSpacing(8)
         right_layout.addWidget(self.shutter_bar, alignment=Qt.AlignCenter)
         right_layout.addStretch()
 
         root.addWidget(left, 0)
         root.addWidget(center, 5)
         root.addWidget(right, 2)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Enter:
+            text = obj.property("toast_text")
+            if text:
+                self._update_toast(text)
+        elif event.type() == QEvent.Leave:
+            if obj.property("toast_text"):
+                self._update_toast("")
+        return super().eventFilter(obj, event)
+
+    def _update_toast(self, text):
+        if text:
+            self.toast_msg.setText(text)
+            self.toast_msg.setStyleSheet("""
+                background-color: #222222; 
+                color: #AAAAAA; 
+                border-radius: 12px; 
+                padding: 0 12px;
+                font-size: 12px;
+                font-weight: 600;
+            """)
+        else:
+            self.toast_msg.setText("")
+            self.toast_msg.setStyleSheet("background: transparent; color: transparent;")
+
+    # [NEW] Resize Event to update Flash Overlay size
+    def resizeEvent(self, event):
+        self.flash_overlay.resize(self.size())
+        super().resizeEvent(event)
 
     # ----------------------------------------------------
     # Camera Logic
@@ -137,7 +185,6 @@ class StartupWindow(BaseFramelessWindow):
         self._start_preview()
 
     def closeEvent(self, event):
-        # [NEW] Save Timer Config on Close
         try:
             current_timer = self.shutter_bar.get_timer_value()
             if self.config["behavior"].get("timer_duration") != current_timer:
@@ -172,7 +219,6 @@ class StartupWindow(BaseFramelessWindow):
         self._current_qimage = qimg 
         if self.preview_lbl.width() <= 0: return
 
-        # Border logic
         margin = 8
         target_w = self.preview_lbl.width() - (margin * 2)
         target_h = self.preview_lbl.height() - (margin * 2)
@@ -202,57 +248,60 @@ class StartupWindow(BaseFramelessWindow):
     # Countdown & Capture Logic
     # ----------------------------------------------------
     def _on_shutter_clicked(self):
-        """Initiate capture sequence (Timer or Instant)."""
         if not self._current_qimage: return
-
-        # 1. Get Timer Value
         delay = self.shutter_bar.get_timer_value()
-
         if delay == 0:
             self._capture_now()
         else:
             self._start_countdown(delay)
 
     def _start_countdown(self, seconds):
-        """Start visual countdown."""
-        # Hide Ghost to clear view
         self.ghost_slider.setEnabled(False)
-        self.ghost_slider.setStyleSheet("opacity: 0.0;") # Hide completely
-        
-        # Disable inputs
+        self.ghost_slider.setStyleSheet("opacity: 0.0;")
         self.shutter_bar.setEnabled(False)
-        
         self._countdown_remaining = seconds
         self.countdown_lbl.setText(str(seconds))
         self.countdown_lbl.show()
-        
-        # Start tick (1 second intervals)
         self._countdown_timer.start(1000)
 
     def _on_countdown_tick(self):
         self._countdown_remaining -= 1
-        
         if self._countdown_remaining > 0:
             self.countdown_lbl.setText(str(self._countdown_remaining))
         else:
-            # Time's up!
             self._countdown_timer.stop()
             self.countdown_lbl.hide()
             self.shutter_bar.setEnabled(True)
             self._capture_now()
 
     def _capture_now(self):
-        """Freeze and enter review."""
+        """Handle Flash Logic, then freeze."""
+        # 1. Check if Flash is Enabled
+        if self.shutter_bar.is_flash_on():
+            # Show Flash (White Screen)
+            self.flash_overlay.show()
+            self.flash_overlay.raise_()
+            
+            # Wait 800ms for camera exposure to adjust, THEN capture
+            # We use singleShot to avoid blocking the GUI
+            QTimer.singleShot(800, self._perform_freeze)
+        else:
+            # Capture immediately
+            self._perform_freeze()
+
+    def _perform_freeze(self):
+        """Finalize capture: Stop camera, hide flash, show review."""
+        self.flash_overlay.hide()
+        
         self._stop_preview()
         self.shutter_bar.setReviewMode(True)
-        # Dim ghost slider to show it's disabled in review
         self.ghost_slider.setEnabled(False) 
         self.ghost_slider.setStyleSheet("opacity: 0.3;")
 
     def _on_retake(self):
         self.shutter_bar.setReviewMode(False)
         self.ghost_slider.setEnabled(True)
-        self.ghost_slider.setStyleSheet("") # Restore visibility
+        self.ghost_slider.setStyleSheet("")
         self._current_qimage = None
         self._start_preview()
 
@@ -269,7 +318,7 @@ class StartupWindow(BaseFramelessWindow):
 
         selected_mood = None
         if self.mood_group.checkedButton():
-            selected_mood = self.mood_group.checkedButton().text()
+            selected_mood = self.mood_group.checkedButton().property("toast_text")
         
         raw_note = self.note_edit.toPlainText().strip()
         selected_note = raw_note if raw_note else None

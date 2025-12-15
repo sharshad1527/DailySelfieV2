@@ -6,7 +6,8 @@ from PySide6.QtGui import QPainter, QColor, QFont
 
 class GhostOpacitySlider(QWidget):
     valueChanged = Signal(int)
-
+    # Signal for Toast
+    hoverStatus = Signal(str)
     def __init__(self, minimum=0, maximum=60, value=30, parent=None):
         super().__init__(parent)
 
@@ -14,6 +15,7 @@ class GhostOpacitySlider(QWidget):
         self._max = maximum
         self._value = value
         self._dragging = False
+
 
         # ===== Visual configuration =====
         self.track_width = 30          # thick pipe
@@ -32,6 +34,18 @@ class GhostOpacitySlider(QWidget):
         self.setFixedWidth(self.track_width + self.bubble_size + self.bubble_gap + self.right_gutter)
         self.setMinimumHeight(300)
         self.setCursor(Qt.PointingHandCursor)
+
+        # Enable Mouse Tracking for Hover
+        self.setMouseTracking(True)
+
+    # -------Hover Logic-------
+    def enterEvent(self, event):
+        self.hoverStatus.emit("Ghost Overlay Transparency")
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.hoverStatus.emit("")
+        super().leaveEvent(event)
 
     # ---------- Value ----------
     def value(self):
