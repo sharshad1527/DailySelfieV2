@@ -60,7 +60,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # Capture rules
         "audit_enabled": True,
         "one_photo_per_day": True,
-        "allow_retake": True,
+        "allow_retake": False,
 
         # Default timer is 0 (Off)
         "timer_duration": 0

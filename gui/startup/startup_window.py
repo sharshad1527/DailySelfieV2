@@ -1,7 +1,8 @@
 from PySide6.QtCore import Qt, QByteArray, QBuffer, QIODevice, QSize, QTimer, QEvent
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, 
-    QPushButton, QTextEdit, QButtonGroup, QGridLayout
+    QPushButton, QTextEdit, QButtonGroup, QGridLayout,
+    QGraphicsOpacityEffect
 )
 from PySide6.QtGui import QPixmap, QImage, QPainter, QPainterPath, QFont
 
@@ -10,10 +11,15 @@ from gui.startup.widgets.ghost_slider import GhostOpacitySlider
 from gui.startup.widgets.shutter_bar import ShutterBar
 from gui.startup.camera.preview import CameraPreviewThread
 from core.capture import commit_capture_from_bytes
+from core.index_api import get_api
 
 class StartupWindow(BaseFramelessWindow):
-    def __init__(self):
+    # [FIX] Added allow_retake argument to __init__
+    def __init__(self, allow_retake=False):
         super().__init__(width=1000, height=560)
+        
+        # Store the override
+        self._force_allow_retake = allow_retake
 
         # ---------- Paths & Config Setup ----------
         from core.config import ensure_config, apply_config_to_paths, write_config
@@ -28,8 +34,17 @@ class StartupWindow(BaseFramelessWindow):
         for p in (self.paths.data_dir, self.paths.photos_root, self.paths.logs_dir):
             p.mkdir(parents=True, exist_ok=True)
 
+        # ---------- Backend API ----------
+        self.index_api = get_api(self.paths)
+        
+        idx = self.index_api._ensure_indexer()
+        if idx.count_rows() == 0:
+            print("Migrating history from captures.jsonl...")
+            self.index_api.migrate_if_needed()
+
         # ---------- State ----------
         self._current_qimage = None 
+        self._raw_ghost_image = None 
         self._preview_thread = None
         
         initial_timer = self.config.get("behavior", {}).get("timer_duration", 0)
@@ -40,12 +55,12 @@ class StartupWindow(BaseFramelessWindow):
 
         # ---------- UI ----------
         self._build_content_ui(initial_timer)
-        
-        # [NEW] Flash Overlay (Hidden by default)
+        self._load_last_photo()
+
+        # Flash Overlay
         self.flash_overlay = QWidget(self)
         self.flash_overlay.setStyleSheet("background-color: white;")
         self.flash_overlay.hide()
-        # Ensure mouse events pass through (though it only appears briefly)
         self.flash_overlay.setAttribute(Qt.WA_TransparentForMouseEvents)
 
         # Signals
@@ -55,6 +70,7 @@ class StartupWindow(BaseFramelessWindow):
         
         self.shutter_bar.hoverStatus.connect(self._update_toast)
         self.ghost_slider.hoverStatus.connect(self._update_toast)
+        self.ghost_slider.valueChanged.connect(self._on_ghost_opacity_change)
 
     def _build_content_ui(self, initial_timer):
         root = QHBoxLayout(self._content)
@@ -71,7 +87,7 @@ class StartupWindow(BaseFramelessWindow):
         left_layout.addWidget(QLabel("Ghost", styleSheet="color:#B0B0B0; margin-left:34px;"))
         left_layout.addWidget(self.ghost_slider, 1, Qt.AlignLeft)
 
-        # --- CENTER (Preview + Overlay) ---
+        # --- CENTER ---
         center = QWidget()
         center_layout = QVBoxLayout(center)
         center_layout.setContentsMargins(0,0,0,0)
@@ -80,9 +96,17 @@ class StartupWindow(BaseFramelessWindow):
         stack_layout = QGridLayout(self.preview_container)
         stack_layout.setContentsMargins(0,0,0,0)
 
+        # Layers: Preview -> Ghost -> Countdown
         self.preview_lbl = QLabel()
         self.preview_lbl.setAlignment(Qt.AlignCenter)
         self.preview_lbl.setStyleSheet("background-color: #333333; border-radius: 16px;")
+        
+        self.ghost_lbl = QLabel()
+        self.ghost_lbl.setAlignment(Qt.AlignCenter)
+        self.ghost_lbl.setStyleSheet("background: transparent;")
+        self.ghost_effect = QGraphicsOpacityEffect(self.ghost_lbl)
+        self.ghost_effect.setOpacity(0.3)
+        self.ghost_lbl.setGraphicsEffect(self.ghost_effect)
         
         self.countdown_lbl = QLabel("")
         self.countdown_lbl.setAlignment(Qt.AlignCenter)
@@ -91,6 +115,7 @@ class StartupWindow(BaseFramelessWindow):
         self.countdown_lbl.hide()
 
         stack_layout.addWidget(self.preview_lbl, 0, 0)
+        stack_layout.addWidget(self.ghost_lbl, 0, 0)
         stack_layout.addWidget(self.countdown_lbl, 0, 0)
 
         center_layout.addWidget(self.preview_container, 1)
@@ -101,14 +126,7 @@ class StartupWindow(BaseFramelessWindow):
         
         self.mood_group = QButtonGroup(self)
         moods_lo = QHBoxLayout()
-        
-        mood_data = [
-            ("😀", "Great"), 
-            ("🙂", "Good"), 
-            ("😐", "Neutral"), 
-            ("😔", "Bad"), 
-            ("😢", "Awful")
-        ]
+        mood_data = [("😀", "Great"), ("🙂", "Good"), ("😐", "Neutral"), ("😔", "Bad"), ("😢", "Awful")]
 
         for icon_char, desc in mood_data:
             b = QPushButton(icon_char)
@@ -147,6 +165,61 @@ class StartupWindow(BaseFramelessWindow):
         root.addWidget(center, 5)
         root.addWidget(right, 2)
 
+    def _load_last_photo(self):
+        try:
+            entry = self.index_api.get_last_photo()
+            if entry and entry.get("path"):
+                from pathlib import Path
+                p = Path(entry["path"])
+                if p.exists():
+                    img = QImage(str(p))
+                    if not img.isNull():
+                        self._raw_ghost_image = img.convertToFormat(QImage.Format_Grayscale8)
+                        # We try to update visuals here, but it might fail if window is size 0
+                        self._update_ghost_visuals()
+        except Exception as e:
+            print(f"Ghost load error: {e}")
+
+    def _update_ghost_visuals(self):
+        if self._raw_ghost_image and self.ghost_lbl.isVisible():
+            pix = self._process_image_for_display(self._raw_ghost_image)
+            if pix:
+                self.ghost_lbl.setPixmap(pix)
+
+    def _on_ghost_opacity_change(self, value):
+        self.ghost_effect.setOpacity(value / 100.0)
+
+    def _process_image_for_display(self, source_image):
+        container_w = self.preview_lbl.width()
+        container_h = self.preview_lbl.height()
+        if container_w <= 0 or container_h <= 0: return None
+
+        margin = 8
+        target_w = container_w - (margin * 2)
+        target_h = container_h - (margin * 2)
+        if target_w <= 0: return None
+
+        pix = QPixmap.fromImage(source_image)
+        scaled = pix.scaled(QSize(target_w, target_h), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        
+        crop_x = (scaled.width() - target_w) // 2
+        crop_y = (scaled.height() - target_h) // 2
+        cropped = scaled.copy(crop_x, crop_y, target_w, target_h)
+
+        final_pix = QPixmap(QSize(container_w, container_h))
+        final_pix.fill(Qt.transparent)
+        
+        painter = QPainter(final_pix)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        path = QPainterPath()
+        path.addRoundedRect(margin, margin, target_w, target_h, 12, 12)
+        
+        painter.setClipPath(path)
+        painter.drawPixmap(margin, margin, cropped)
+        painter.end()
+        return final_pix
+
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Enter:
             text = obj.property("toast_text")
@@ -172,17 +245,19 @@ class StartupWindow(BaseFramelessWindow):
             self.toast_msg.setText("")
             self.toast_msg.setStyleSheet("background: transparent; color: transparent;")
 
-    # [NEW] Resize Event to update Flash Overlay size
     def resizeEvent(self, event):
         self.flash_overlay.resize(self.size())
+        if self._raw_ghost_image:
+            self._update_ghost_visuals()
         super().resizeEvent(event)
 
-    # ----------------------------------------------------
-    # Camera Logic
-    # ----------------------------------------------------
     def showEvent(self, event):
         super().showEvent(event)
         self._start_preview()
+        
+        # [FIX] Force ghost update now that window is visible
+        if self._raw_ghost_image:
+            self._update_ghost_visuals()
 
     def closeEvent(self, event):
         try:
@@ -191,11 +266,11 @@ class StartupWindow(BaseFramelessWindow):
                 self.config["behavior"]["timer_duration"] = current_timer
                 from core.config import write_config
                 write_config(self.config_path, self.config)
-                print(f"Saved timer setting: {current_timer}s")
-        except Exception as e:
-            print(f"Failed to save config: {e}")
-
+        except Exception:
+            pass
         self._stop_preview()
+        if self.index_api:
+            self.index_api.close()
         super().closeEvent(event)
 
     def _start_preview(self):
@@ -217,36 +292,10 @@ class StartupWindow(BaseFramelessWindow):
 
     def _update_preview(self, qimg):
         self._current_qimage = qimg 
-        if self.preview_lbl.width() <= 0: return
+        pix = self._process_image_for_display(qimg)
+        if pix:
+            self.preview_lbl.setPixmap(pix)
 
-        margin = 8
-        target_w = self.preview_lbl.width() - (margin * 2)
-        target_h = self.preview_lbl.height() - (margin * 2)
-        if target_w <= 0: return
-
-        pix = QPixmap.fromImage(qimg)
-        scaled = pix.scaled(QSize(target_w, target_h), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-        
-        crop_x = (scaled.width() - target_w) // 2
-        crop_y = (scaled.height() - target_h) // 2
-        cropped = scaled.copy(crop_x, crop_y, target_w, target_h)
-
-        final_pix = QPixmap(self.preview_lbl.size())
-        final_pix.fill(Qt.transparent)
-        painter = QPainter(final_pix)
-        painter.setRenderHint(QPainter.Antialiasing)
-        
-        path = QPainterPath()
-        path.addRoundedRect(margin, margin, target_w, target_h, 12, 12)
-        painter.setClipPath(path)
-        painter.drawPixmap(margin, margin, cropped)
-        painter.end()
-        
-        self.preview_lbl.setPixmap(final_pix)
-
-    # ----------------------------------------------------
-    # Countdown & Capture Logic
-    # ----------------------------------------------------
     def _on_shutter_clicked(self):
         if not self._current_qimage: return
         delay = self.shutter_bar.get_timer_value()
@@ -256,6 +305,7 @@ class StartupWindow(BaseFramelessWindow):
             self._start_countdown(delay)
 
     def _start_countdown(self, seconds):
+        self.ghost_lbl.hide() 
         self.ghost_slider.setEnabled(False)
         self.ghost_slider.setStyleSheet("opacity: 0.0;")
         self.shutter_bar.setEnabled(False)
@@ -275,25 +325,17 @@ class StartupWindow(BaseFramelessWindow):
             self._capture_now()
 
     def _capture_now(self):
-        """Handle Flash Logic, then freeze."""
-        # 1. Check if Flash is Enabled
         if self.shutter_bar.is_flash_on():
-            # Show Flash (White Screen)
             self.flash_overlay.show()
             self.flash_overlay.raise_()
-            
-            # Wait 800ms for camera exposure to adjust, THEN capture
-            # We use singleShot to avoid blocking the GUI
             QTimer.singleShot(800, self._perform_freeze)
         else:
-            # Capture immediately
             self._perform_freeze()
 
     def _perform_freeze(self):
-        """Finalize capture: Stop camera, hide flash, show review."""
         self.flash_overlay.hide()
-        
         self._stop_preview()
+        self.ghost_lbl.hide()
         self.shutter_bar.setReviewMode(True)
         self.ghost_slider.setEnabled(False) 
         self.ghost_slider.setStyleSheet("opacity: 0.3;")
@@ -302,16 +344,17 @@ class StartupWindow(BaseFramelessWindow):
         self.shutter_bar.setReviewMode(False)
         self.ghost_slider.setEnabled(True)
         self.ghost_slider.setStyleSheet("")
+        if self._raw_ghost_image:
+            self.ghost_lbl.show()
+            self._update_ghost_visuals()
         self._current_qimage = None
         self._start_preview()
 
     def _on_save(self):
         if not self._current_qimage: return
-
         byte_array = QByteArray()
         buffer = QBuffer(byte_array)
         buffer.open(QIODevice.WriteOnly)
-        
         quality = self.config.get("behavior", {}).get("quality", 90)
         self._current_qimage.save(buffer, "JPG", quality)
         jpg_data = byte_array.data()
@@ -324,6 +367,10 @@ class StartupWindow(BaseFramelessWindow):
         selected_note = raw_note if raw_note else None
 
         beh = self.config.get("behavior", {})
+        
+        # [FIX] Use the override if present, otherwise fall back to config
+        effective_allow_retake = self._force_allow_retake or beh.get("allow_retake", False)
+
         result = commit_capture_from_bytes(
             self.paths,
             jpeg_bytes=jpg_data,
@@ -331,7 +378,7 @@ class StartupWindow(BaseFramelessWindow):
             height=self._current_qimage.height(),
             mood=selected_mood,
             notes=selected_note,
-            allow_retake=beh.get("allow_retake", False)
+            allow_retake=effective_allow_retake
         )
 
         if result["success"]:

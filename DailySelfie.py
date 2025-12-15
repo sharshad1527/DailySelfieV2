@@ -17,8 +17,8 @@ from core.config import load_config, apply_config_to_paths
 from core.logging import init_logger, read_jsonl_tail
 from core.index_api import get_api as get_index_api
 from core.autostart_manager import set_autostart
-
-
+# Import the checker
+from core.capture import check_if_already_captured
 # ---------------------------------------------------------
 # Sub-Command Handlers
 # ---------------------------------------------------------
@@ -144,13 +144,14 @@ def main(argv=None):
     grp_run = parser.add_argument_group("Runtime Modes")
     grp_run.add_argument("--start-up", action="store_true", help="Launch the 'Daily Prompt' popup (GUI)")
     grp_run.add_argument("--capture", action="store_true", help="Take a photo immediately (CLI / Headless mode)")
+    grp_run.add_argument("--allow-retake", action="store_true", help="Overwrite existing photo for today if present")
+    
     grp_run.add_argument("--show-paths", action="store_true", help="Display all resolved file paths")
     grp_run.add_argument("--list-cameras", action="store_true", help="Scan and list available video devices")
     grp_run.add_argument("--tail-logs", type=int, nargs="?", const=20, metavar="N", help="Show last N log entries (default: 20)")
 
     # Group: Capture Overrides
-    grp_cfg = parser.add_argument_group("Capture Overrides (for --capture)")
-    grp_cfg.add_argument("--allow-retake", action="store_true", help="Overwrite existing photo for today if present")
+    grp_cfg = parser.add_argument_group("Hardware Overrides")
     grp_cfg.add_argument("--camera-index", type=int, metavar="N", help="Override config camera index")
     grp_cfg.add_argument("--width", type=int, metavar="PX", help="Override target width")
     grp_cfg.add_argument("--height", type=int, metavar="PX", help="Override target height")
@@ -229,11 +230,26 @@ def main(argv=None):
     # START UP GUI LAUNCHER 
     # -------------------------------------------------
     if args.start_up:
+
+        # Determine global retake policy (CLI arg overrides Config)
+        beh = cfg.get("behavior", {})
+        config_allow = beh.get("allow_retake", False)
+        final_allow_retake = args.allow_retake or config_allow
+
+        # Check existence
+        has_photo, existing_path = check_if_already_captured(paths)
+        
+        if has_photo and not final_allow_retake:
+            print(f"Daily Selfie already taken for today: {existing_path}")
+            print("Skipping startup. Use --allow-retake to force open.")
+            return 0
+        # Launch GUI
         from PySide6.QtWidgets import QApplication
         from gui.startup.startup_window import StartupWindow
 
         app = QApplication(sys.argv)
-        win = StartupWindow()
+        # Pass the calculated flag into the Window
+        win = StartupWindow(allow_retake=final_allow_retake)
         win.show()
         return app.exec()
 
