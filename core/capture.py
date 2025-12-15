@@ -1,19 +1,113 @@
 # core/capture.py
 """
 High-level capture pipeline for DailySelfie.
-
-- Reads raw frame to determine width/height
-- Encodes JPEG bytes with requested quality
-- Saves into storage (root/YYYY/MM/YYYY-MM-DD_HHMMSS.jpg)
-- Enforces one-photo-per-day; when allow_retake=True deletes previous photo and records deletion
-- Records capture/deletion events via core.index_api (writes DB + sidecar + audit JSONL)
 """
 from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any
 
+# ---------------------------------------------------------
+# Shared Logic: Commit Bytes -> Disk/DB
+# ---------------------------------------------------------
+def commit_capture_from_bytes(
+    app_paths,
+    jpeg_bytes: bytes,
+    width: int,
+    height: int,
+    # [NEW] Added optional metadata arguments
+    mood: Optional[str] = None,
+    notes: Optional[str] = None,
+    allow_retake: bool = False,
+    logger=None
+) -> Dict[str, Any]:
+    """
+    Saves provided JPEG bytes to disk and records the entry.
+    Handles 'allow_retake' logic (deleting previous photo) automatically.
+    """
+    ts = datetime.now(timezone.utc)
+    
+    # 1. Lazy load dependencies
+    try:
+        from core.storage import (
+            save_image_bytes,
+            last_image_for_date,
+            delete_last_image_for_date,
+            append_capture_index,
+        )
+        from core.metadata import write_meta
+    except ImportError as e:
+        return {"success": False, "error": f"Import failed: {e}"}
 
+    # 2. Check/Handle Existing (Retake Logic)
+    existing = last_image_for_date(Path(app_paths.photos_root), ts)
+    
+    if existing:
+        if not allow_retake:
+            msg = f"Photo already exists for {ts.date()}"
+            if logger:
+                logger.info("capture_blocked", extra={"meta": {"date": str(ts.date())}})
+            return {"success": False, "error": msg, "path": str(existing)}
+        
+        # If retake allowed, delete previous
+        ok_del, err_del, deleted_path = delete_last_image_for_date(Path(app_paths.photos_root), ts)
+        if ok_del and logger:
+            logger.info("retake_deletion", extra={"meta": {"path": str(deleted_path)}})
+            try:
+                from core.index_api import get_api
+                api = get_api(app_paths)
+                api.record_deletion(deleted_path.stem, reason="retake")
+            except Exception:
+                pass 
+
+    # 3. Save New Image
+    res = save_image_bytes(Path(app_paths.photos_root), ts, jpeg_bytes)
+    if not res.success:
+        return {"success": False, "error": f"Save failed: {res.error}"}
+
+    saved_path = res.path
+    id_token = saved_path.stem
+
+    # 4. Record to Index (DB/JSONL)
+    index_entry = {
+        "id": id_token,
+        "ts": ts.isoformat(),
+        "path": str(saved_path),
+        "width": width,
+        "height": height,
+        "resolution": f"{width}x{height}",
+        "mood": mood,   # [MODIFIED] Now saving actual mood
+        "notes": notes, # [MODIFIED] Now saving actual notes
+        "action": "capture",
+    }
+
+    # Try using robust IndexAPI first
+    try:
+        from core.index_api import get_api
+        api = get_api(app_paths)
+        api.record_capture(index_entry)
+    except Exception as e:
+        if logger: logger.warning(f"IndexAPI failed ({e}), falling back to direct JSONL append.")
+        try:
+            # Fallback 1: Append JSONL
+            index_file = Path(app_paths.data_dir) / "captures.jsonl"
+            append_capture_index(index_file, index_entry)
+            
+            # Fallback 2: Write Sidecar (Explicitly writing metadata here)
+            sidecar_data = {"id": id_token, "mood": mood, "notes": notes}
+            write_meta(Path(app_paths.data_dir), id_token, sidecar_data)
+        except Exception:
+            pass 
+
+    if logger:
+        logger.info("image_saved", extra={"meta": {"path": str(saved_path), "id": id_token}})
+
+    return {"success": True, "path": str(saved_path), "id": id_token, "timestamp": ts.isoformat()}
+
+
+# ---------------------------------------------------------
+# CLI / One-Shot Capture
+# ---------------------------------------------------------
 def capture_once(
     app_paths,
     *,
@@ -25,186 +119,34 @@ def capture_once(
     allow_retake: bool = False,
 ) -> Dict[str, Any]:
     """
-    Capture one image and save it.
-
-    Returns a dict with keys:
-      success: bool
-      path: Optional[str]
-      timestamp: Optional[str]
-      error: Optional[str]
-      id: Optional[str]   # derived from filename YYYY-MM-DD_HHMMSS
+    Capture one image immediately (CLI Mode).
+    CLI mode currently sends None for mood/notes.
     """
+    # 1. Open Camera & Snap
     try:
         from core.camera import Camera
-    except Exception as e:
-        msg = f"camera dependency error: {e}"
-        if logger:
-            logger.error(msg)
-        return {"success": False, "path": None, "timestamp": None, "error": msg, "id": None}
-
-    try:
-        from core.storage import (
-            save_image_bytes,
-            last_image_for_date,
-            delete_last_image_for_date,
-        )
-    except Exception as e:
-        msg = f"storage dependency error: {e}"
-        if logger:
-            logger.error(msg)
-        return {"success": False, "path": None, "timestamp": None, "error": msg, "id": None}
-
-    # index API imported lazily so capture still works if index modules fail
-    IndexAPI_getter = None
-    try:
-        from core.index_api import get_api as IndexAPI_getter  # type: ignore
-    except Exception:
-        IndexAPI_getter = None
-
-    ts = datetime.now(timezone.utc)
-
-    # Check existing image for the day
-    existing = last_image_for_date(Path(app_paths.photos_root), ts)
-    if existing and not allow_retake:
-        msg = f"photo already exists for {ts.date()}: {existing}"
-        if logger:
-            logger.info("capture_blocked_one_per_day", extra={"meta": {"existing": str(existing), "date": ts.date().isoformat()}})
-        return {"success": False, "path": str(existing), "timestamp": ts.isoformat(), "error": msg, "id": None}
-
-    # If retake requested and an existing image exists, delete it and record deletion via index API
-    if existing and allow_retake:
-        ok_del, err_del, deleted_path = delete_last_image_for_date(Path(app_paths.photos_root), ts)
-        if ok_del:
-            if logger:
-                logger.info("retake_deleted_previous", extra={"meta": {"path": str(deleted_path)}})
-            # record deletion in index (DB + JSONL + sidecar removal) if API available
-            if IndexAPI_getter is not None:
-                try:
-                    api = IndexAPI_getter(app_paths)
-                    try:
-                        api.record_deletion(deleted_path.stem, reason="retake")
-                    except Exception:
-                        if logger:
-                            logger.exception("index_deletion_record_failed")
-                except Exception:
-                    # get_api construction failed; log and continue
-                    if logger:
-                        logger.exception("index_api_get_failed_for_deletion")
-        else:
-            if logger:
-                logger.warning("retake_delete_failed", extra={"meta": {"path": str(existing), "err": err_del}})
-
-    # Capture raw frame and encode JPEG
-    frame = None
-    try:
+        import cv2
+        
         with Camera(index=camera_index, width=width, height=height) as cam:
-            frame = cam.read_frame()  # numpy array
-            # encode to JPEG
-            import cv2
-
+            frame = cam.read_frame()
+            
+            # Encode to JPEG
             ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
             if not ok:
-                raise RuntimeError("JPEG encode failed")
+                return {"success": False, "error": "JPEG encoding failed"}
+            
             jpeg_bytes = buf.tobytes()
+            h, w = frame.shape[:2]
+
     except Exception as e:
-        msg = f"capture failed: {e}"
-        if logger:
-            logger.exception(msg)
-        return {"success": False, "path": None, "timestamp": None, "error": msg, "id": None}
+        if logger: logger.exception("camera_error")
+        return {"success": False, "error": str(e)}
 
-    if frame is None:
-        msg = "no frame captured"
-        if logger:
-            logger.error(msg)
-        return {"success": False, "path": None, "timestamp": None, "error": msg, "id": None}
-
-    # derive width/height (numpy shape)
-    try:
-        height_px, width_px = int(frame.shape[0]), int(frame.shape[1])
-    except Exception:
-        height_px, width_px = None, None
-
-    # Save bytes
-    try:
-        res = save_image_bytes(Path(app_paths.photos_root), ts, jpeg_bytes)
-        if not res.success:
-            msg = f"save failed: {res.error}"
-            if logger:
-                logger.error(msg, extra={"meta": {"error": res.error}})
-            return {"success": False, "path": None, "timestamp": ts.isoformat(), "error": msg, "id": None}
-
-        saved_path = res.path
-        # id derived from filename sans extension e.g. "2025-12-12_074512"
-        id_token = saved_path.stem
-
-        # Build index entry
-        index_entry = {
-            "id": id_token,
-            "ts": ts.isoformat(),
-            "path": str(saved_path),
-            "width": width_px,
-            "height": height_px,
-            "resolution": f"{width_px}x{height_px}" if width_px and height_px else None,
-            "mood": None,  # CLI capture has no mood; GUI may update per-uuid sidecar later
-            "notes": None,
-            "action": "capture",
-        }
-
-        # Record via IndexAPI if available (writes JSONL audit + DB + sidecar under lock)
-        if IndexAPI_getter is not None:
-            try:
-                api = IndexAPI_getter(app_paths)
-                try:
-                    api.record_capture(index_entry)
-                except Exception:
-                    # Index recording failed; log but do not fail the capture (image file exists)
-                    if logger:
-                        logger.exception("index_record_failed")
-                    return {"success": True, "path": str(saved_path), "timestamp": ts.isoformat(), "error": "index_record_failed", "id": id_token}
-            except Exception:
-                if logger:
-                    logger.exception("index_api_get_failed_for_capture")
-                return {"success": True, "path": str(saved_path), "timestamp": ts.isoformat(), "error": "index_api_get_failed", "id": id_token}
-        else:
-            # Fallback: append audit JSONL directly if index API not available
-            try:
-                from core.storage import append_capture_index
-
-                index_file = Path(app_paths.data_dir) / "captures.jsonl"
-                try:
-                    append_capture_index(index_file, index_entry)
-                except Exception:
-                    if logger:
-                        logger.exception("append_capture_index_failed_fallback")
-                # create sidecar stub directly as a best-effort fallback
-                try:
-                    from core.metadata import write_meta
-
-                    write_meta(Path(app_paths.data_dir), id_token, {"id": id_token, "mood": None, "notes": None})
-                except Exception:
-                    pass
-            except Exception:
-                # nothing to do; index modules missing
-                if logger:
-                    logger.debug("index modules missing; skipped recording")
-        # Log saved image
-        if logger:
-            logger.info("image_saved", extra={"meta": {"path": str(saved_path), "timestamp": ts.isoformat(), "id": id_token}})
-
-        return {"success": True, "path": str(saved_path), "timestamp": ts.isoformat(), "error": None, "id": id_token}
-    except Exception as e:
-        msg = f"unexpected save error: {e}"
-        if logger:
-            logger.exception(msg)
-        return {"success": False, "path": None, "timestamp": ts.isoformat(), "error": msg, "id": None}
-
-
-# Quick CLI test when run directly
-if __name__ == "__main__":
-    from core.paths import get_app_paths
-    from core.logging import init_logger
-
-    p = get_app_paths("DailySelfie", ensure=True)
-    logger = init_logger(p.logs_dir)
-    out = capture_once(p, camera_index=0, width=640, height=480, quality=85, logger=logger, allow_retake=True)
-    print(out)
+    # 2. Commit
+    return commit_capture_from_bytes(
+        app_paths, 
+        jpeg_bytes, 
+        w, h, 
+        allow_retake=allow_retake, 
+        logger=logger
+    )
