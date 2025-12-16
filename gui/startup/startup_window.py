@@ -160,12 +160,45 @@ class StartupWindow(BaseFramelessWindow):
         self.mood_group = QButtonGroup(self)
         moods_lo = QHBoxLayout()
         mood_data = [("😀", "Great"), ("🙂", "Good"), ("😐", "Neutral"), ("😔", "Bad"), ("😢", "Awful")]
+        #1F1F1F
+        emoji_style_default = """
+            QPushButton {
+                background-color: #1F1F1F;
+                border: 2px solid transparent;
+                border-radius: 20px;
+                font-size: 18px;
+            }
+            QPushButton:hover {
+                background-color: #333333;
+            }
+            QPushButton:checked {
+                background-color: #1F1F1F;
+                border: 2px solid #8B5CF6;
+            }
+        """
+
+
+        emoji_style_new = """
+            QPushButton {
+                background-color: transparent;
+                border: 2px solid #1F1F1F;
+                border-radius: 20px;
+                font-size: 18px;
+            }
+            QPushButton:hover {
+                border: 2px solid #333333;
+            }
+            QPushButton:checked {
+                border: 2px solid #8B5CF6;
+            }
+        """
 
         for icon_char, desc in mood_data:
             b = QPushButton(icon_char)
             b.setCheckable(True)
             b.setFixedSize(40,40)
-            b.setStyleSheet("QPushButton{background:#1F1F1F; border-radius:20px; font-size:18px;} QPushButton:checked{background:#8B5CF6;}")
+            # b.setStyleSheet("QPushButton{background:#1F1F1F; border-radius:20px; font-size:18px;} QPushButton:checked{background:#8B5CF6;}")
+            b.setStyleSheet(emoji_style_new)
             b.setProperty("toast_text", desc)
             b.installEventFilter(self)
             self.mood_group.addButton(b)
@@ -174,7 +207,25 @@ class StartupWindow(BaseFramelessWindow):
         self.note_edit = QTextEdit()
         self.note_edit.setPlaceholderText("Anything about today...")
         self.note_edit.setFixedHeight(100)
-        self.note_edit.setStyleSheet("background:#1A1A1A; border-radius:8px; padding:8px; color:#E0E0E0;")
+        # self.note_edit.setStyleSheet("background:#1A1A1A; border-radius:8px; padding:8px; color:#E0E0E0;")
+        self.note_edit.setStyleSheet("""
+            QTextEdit {
+                background-color: #1A1A1A;
+                border: 2px solid transparent;
+                border-radius: 8px;
+                padding: 8px;
+                color: #E0E0E0;
+            }
+            QTextEdit:hover {
+                border: 2px solid #333333;
+                background-color: #1F1F1F;
+            }
+            QTextEdit:focus {
+                border: 2px solid #8B5CF6;
+                background-color: #1F1F1F;
+            }
+            
+        """)
         
         self.toast_msg = QLabel("")
         self.toast_msg.setAlignment(Qt.AlignCenter)
@@ -268,7 +319,8 @@ class StartupWindow(BaseFramelessWindow):
             self.toast_msg.setText(text)
             self.toast_msg.setStyleSheet("""
                 background-color: #222222; 
-                color: #AAAAAA; 
+                color: #AAAAAA;
+                border: 2px solid #8B5CF6; 
                 border-radius: 12px; 
                 padding: 0 12px;
                 font-size: 12px;
