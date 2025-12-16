@@ -17,16 +17,17 @@ class CameraPreviewThread(QThread):
     def run(self):
         self._running = True
         consecutive_errors = 0
-        max_retries = 20  # Allow 20 failed frames (approx 2-3 seconds of warm-up)
+        max_retries = 50  # Allow 50 failed frames (approx 2-3 seconds of warm-up)
 
         try:
             with Camera(index=self.camera_index, width=self.width, height=self.height) as cam:
                 # Camera opened successfully, now enter the read loop
+                time.sleep(0.3)
                 while self._running:
                     try:
                         frame = cam.read_frame()
                         
-                        # [FIX] Success! Reset error counter
+                        # Reset error counter
                         consecutive_errors = 0
                         
                         h, w, ch = frame.shape
@@ -38,7 +39,7 @@ class CameraPreviewThread(QThread):
                         time.sleep(0.03)
 
                     except Exception as e:
-                        # [FIX] Don't crash immediately. Count errors.
+                        # Don't crash immediately. Count errors.
                         consecutive_errors += 1
                         
                         # If we just started or it's a hiccup, wait a bit and retry

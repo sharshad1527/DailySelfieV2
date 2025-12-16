@@ -37,9 +37,7 @@ DEFAULT_BACKUP_COUNT = 3
 
 
 class JsonLineFormatter(logging.Formatter):
-    """Format LogRecord as a single JSON line (no newlines inside)."""
-
-    def format(self, record: logging.LogRecord) -> str:  # pragma: no cover - simple formatting
+    def format(self, record: logging.LogRecord) -> str:
         ts = datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat()
         entry: Dict[str, Any] = {
             "ts": ts,
@@ -47,17 +45,14 @@ class JsonLineFormatter(logging.Formatter):
             "logger": record.name,
             "msg": record.getMessage(),
         }
-        # allow structured metadata via record.meta and record.uuid
-        if hasattr(record, "meta") and record.meta is not None:
+        if hasattr(record, "meta") and record.meta:
             entry["meta"] = record.meta
-        if getattr(record, "uuid", None):
-            entry["uuid"] = record.uuid
-        # attach exception info if present
+        
+        # Handle Exception Info
         if record.exc_info:
-            try:
-                entry["exc"] = self.formatException(record.exc_info)
-            except Exception:
-                entry["exc"] = "<exc format failed>"
+            # Format the full traceback
+            entry["exc"] = self.formatException(record.exc_info)
+        
         return json.dumps(entry, ensure_ascii=False)
 
 
@@ -69,65 +64,39 @@ def _make_rotating_handler(log_file: Path, max_bytes: int, backup_count: int) ->
     return handler
 
 
-def init_logger(logs_dir: Path, *, filename: str = DEFAULT_LOG_FILENAME, max_bytes: int = DEFAULT_MAX_BYTES,
-                backup_count: int = DEFAULT_BACKUP_COUNT, console: bool = True) -> logging.Logger:
-    """Initialize and return the root `dailyselfie` logger.
-
-    If a logger with name "dailyselfie" already exists it will be returned (idempotent).
-
-    Parameters
-    ----------
-    logs_dir: Path
-        Directory where log files live. This function will not create the directory — callers
-        should ensure it exists (e.g. via paths.get_app_paths(ensure=True)).
-    filename: str
-        Log filename (JSONL)
-    max_bytes: int
-        Max size per file before rotation
-    backup_count: int
-        Number of rotated files to keep
-    console: bool
-        If True, attach a console StreamHandler for human-readable INFO-level output.
-
-    Returns
-    -------
-    logging.Logger
-    """
-    name = "dailyselfie"
-    logger = logging.getLogger(name)
+def init_logger(logs_dir: Path, console: bool = True) -> logging.Logger:
+    """Initialize the root logger. Idempotent."""
+    logger = logging.getLogger("dailyselfie")
     if logger.handlers:
-        # assume already initialized
         return logger
 
     logger.setLevel(logging.DEBUG)
+    logger.propagate = False  # Don't double-print to root
 
-    log_file = logs_dir / filename
-    file_handler = _make_rotating_handler(log_file, max_bytes, backup_count)
-    file_handler.setLevel(logging.DEBUG)
-    logger.addHandler(file_handler)
+    # 1. File Handler (JSONL)
+    log_file = logs_dir / DEFAULT_LOG_FILENAME
+    file_h = logging.handlers.RotatingFileHandler(
+        log_file, maxBytes=DEFAULT_MAX_BYTES, backupCount=DEFAULT_BACKUP_COUNT, encoding="utf-8"
+    )
+    file_h.setFormatter(JsonLineFormatter())
+    file_h.setLevel(logging.DEBUG) # Log EVERYTHING to file
+    logger.addHandler(file_h)
 
+    # 2. Console Handler (Human Readable)
     if console:
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
-        console_handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
-        logger.addHandler(console_handler)
-
-    # Avoid double logging if root logger also configured elsewhere
-    logger.propagate = False
+        console_h = logging.StreamHandler()
+        console_h.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+        console_h.setLevel(logging.INFO) # Only INFO+ to terminal
+        logger.addHandler(console_h)
 
     return logger
 
 
 def get_logger(child: Optional[str] = None) -> logging.Logger:
-    """Return a namespaced logger under 'dailyselfie'.
-
-    Examples
-    --------
-    get_logger() -> Logger("dailyselfie")
-    get_logger("camera") -> Logger("dailyselfie.camera")
-    """
+    """Get the 'dailyselfie' logger or a child (e.g., 'dailyselfie.camera')."""
     base = "dailyselfie"
-    return logging.getLogger(base if not child else f"{base}.{child}")
+    name = f"{base}.{child}" if child else base
+    return logging.getLogger(name)
 
 
 def read_jsonl_tail(log_file: Path, max_lines: int = 200) -> List[Dict[str, Any]]:

@@ -6,15 +6,17 @@ The central entry point for the Daily Selfie application.
 Handles CLI arguments, installation lifecycle, and launching the GUI.
 """
 from __future__ import annotations
-
+import os
+os.environ["QT_LOGGING_RULES"] = "*.debug=false;qt.qpa.*=false"
 import argparse
 import sys
 from pathlib import Path
+import traceback
 
 # Core utilities (fast imports)
 from core.paths import get_app_paths
 from core.config import load_config, apply_config_to_paths
-from core.logging import init_logger, read_jsonl_tail
+from core.logging import init_logger, read_jsonl_tail, get_logger
 from core.index_api import get_api as get_index_api
 from core.autostart_manager import set_autostart
 # Import the checker
@@ -114,11 +116,38 @@ def cmd_tail_logs(paths, n=20):
         print(f"[{ts}] {level}: {msg}")
     return 0
 
+    #---------------------------------
+    # DEFINE THE GLOBAL CRASH HANDLER
+    #---------------------------------
+def global_exception_hook(exctype, value, tb):
+    """
+    Catch any unhandled exception (bug) and log it before crashing.
+    """
+    # Ignore KeyboardInterrupt (Ctrl+C)
+    if issubclass(exctype, KeyboardInterrupt):
+        sys.__excepthook__(exctype, value, tb)
+        return
+
+    logger = get_logger("crash_handler")
+    logger.critical("Uncaught Exception", exc_info=(exctype, value, tb))
+    
+    # We rely on the log file being written. 
+    # Since the GUI might be dead, we print to stderr as a backup.
+    sys.stderr.write("!!! CRITICAL CRASH LOGGED !!!\n")
+    traceback.print_exception(exctype, value, tb)
+    
+    # Optional: If you want to try restarting:
+    # os.execl(sys.executable, sys.executable, *sys.argv)
+    # For now, safe exit:
+    sys.exit(1)
 
 # ---------------------------------------------------------
 # Main Entry Point
 # ---------------------------------------------------------
 def main(argv=None):
+    # REGISTER THE HOOK IMMEDIATELY
+    sys.excepthook = global_exception_hook
+
     argv = argv if argv is not None else sys.argv[1:]
 
     # 1. Bootstrap: Resolve paths relative to OS (before config is loaded)

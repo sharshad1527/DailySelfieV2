@@ -1,3 +1,5 @@
+import logging
+import sys
 from PySide6.QtCore import Qt, QByteArray, QBuffer, QIODevice, QSize, QTimer, QEvent
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, 
@@ -13,10 +15,25 @@ from gui.startup.camera.preview import CameraPreviewThread
 from core.capture import commit_capture_from_bytes
 from core.index_api import get_api
 
+from core.logging import get_logger
+from gui.qt_logging import QtSignalingHandler, install_qt_logger
+from gui.widgets.error_popup import ErrorToast
+
 class StartupWindow(BaseFramelessWindow):
-    # [FIX] Added allow_retake argument to __init__
     def __init__(self, allow_retake=False):
         super().__init__(width=1000, height=560)
+
+        install_qt_logger() # Catch Qt internal errors
+
+        self.log_handler = QtSignalingHandler()
+        self.log_handler.setLevel(logging.WARNING) # Only show Warnings/Errors in Popup
+        
+        # Attach to root logger
+        root_logger = get_logger()
+        root_logger.addHandler(self.log_handler)
+        
+        # Connect Signal -> Popup
+        self.log_handler.emitter.new_log.connect(self._on_log_received)
         
         # Store the override
         self._force_allow_retake = allow_retake
@@ -71,6 +88,22 @@ class StartupWindow(BaseFramelessWindow):
         self.shutter_bar.hoverStatus.connect(self._update_toast)
         self.ghost_slider.hoverStatus.connect(self._update_toast)
         self.ghost_slider.valueChanged.connect(self._on_ghost_opacity_change)
+    def _on_log_received(self, log_entry):
+        """Called when a log message is emitted."""
+        level = log_entry["level"]
+        msg = log_entry["msg"]
+        exc = log_entry.get("exc")
+
+        # Create the popup relative to this window
+        popup = ErrorToast(self, level=level, message=msg, traceback=exc)
+        
+        # Center it nicely
+        geo = self.geometry()
+        x = geo.x() + (geo.width() - popup.width()) // 2
+        y = geo.y() + (geo.height() - popup.height()) // 2
+        popup.move(x, y)
+        
+        popup.show()
 
     def _build_content_ui(self, initial_timer):
         root = QHBoxLayout(self._content)
