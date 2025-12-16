@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QPushButton, QTextEdit, QButtonGroup, QGridLayout,
     QGraphicsOpacityEffect
 )
-from PySide6.QtGui import QPixmap, QImage, QPainter, QPainterPath, QFont
+from PySide6.QtGui import QPixmap, QImage, QPainter, QPainterPath, QFont, QMovie, QIcon
 
 from gui.startup.window_con import BaseFramelessWindow
 from gui.startup.widgets.ghost_slider import GhostOpacitySlider
@@ -18,6 +18,54 @@ from core.index_api import get_api
 from core.logging import get_logger
 from gui.qt_logging import QtSignalingHandler, install_qt_logger
 from gui.widgets.error_popup import ErrorToast
+
+class GifButton(QPushButton):
+    def __init__(self, gif_path, parent=None):
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setCursor(Qt.PointingHandCursor)
+        
+        # Load the GIF
+        self.movie = QMovie(gif_path)
+        # Verify the GIF is valid
+        if not self.movie.isValid():
+            print(f"Warning: Could not load GIF at {gif_path}")
+            
+        # Connect frame changes to the button icon
+        self.movie.frameChanged.connect(self._update_icon)
+        
+        # Start in 'stopped' state (Frame 0)
+        self.movie.jumpToFrame(0)
+        self._update_icon()
+
+        # Connect internal toggle signal
+        self.toggled.connect(self._check_playback_state)
+
+    def _update_icon(self):
+        # Updates the button icon with the current GIF frame.
+        pix = self.movie.currentPixmap()
+        self.setIcon(QIcon(pix))
+
+    def _check_playback_state(self):
+        # Decides whether to play or stop based on Hover & Check state.
+        should_play = self.underMouse() or self.isChecked()
+        
+        if should_play:
+            if self.movie.state() != QMovie.Running:
+                self.movie.start()
+        else:
+            self.movie.stop()
+            self.movie.jumpToFrame(0) # Reset to start
+            self._update_icon()
+
+    # --- Event Overrides for Hover Effects ---
+    def enterEvent(self, event):
+        self._check_playback_state()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._check_playback_state()
+        super().leaveEvent(event)
 
 class StartupWindow(BaseFramelessWindow):
     def __init__(self, allow_retake=False):
@@ -157,26 +205,19 @@ class StartupWindow(BaseFramelessWindow):
         right = QWidget()
         right_layout = QVBoxLayout(right)
         
+        # Mood
         self.mood_group = QButtonGroup(self)
         moods_lo = QHBoxLayout()
-        mood_data = [("😀", "Great"), ("🙂", "Good"), ("😐", "Neutral"), ("😔", "Bad"), ("😢", "Awful")]
-        #1F1F1F
-        emoji_style_default = """
-            QPushButton {
-                background-color: #1F1F1F;
-                border: 2px solid transparent;
-                border-radius: 20px;
-                font-size: 18px;
-            }
-            QPushButton:hover {
-                background-color: #333333;
-            }
-            QPushButton:checked {
-                background-color: #1F1F1F;
-                border: 2px solid #8B5CF6;
-            }
-        """
-
+        moods_lo.setSpacing(12)
+        from pathlib import Path
+        ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "icons" / "mood"
+        mood_data = [
+            ("cool.gif", "Great"), 
+            ("smile.gif", "Good"), 
+            ("neutral.gif", "Neutral"), 
+            ("sad.gif", "Bad"), 
+            ("sosad.gif", "Awful")
+        ]
 
         emoji_style_new = """
             QPushButton {
@@ -191,23 +232,25 @@ class StartupWindow(BaseFramelessWindow):
             QPushButton:checked {
                 border: 2px solid #8B5CF6;
             }
-        """
-
-        for icon_char, desc in mood_data:
-            b = QPushButton(icon_char)
-            b.setCheckable(True)
-            b.setFixedSize(40,40)
-            # b.setStyleSheet("QPushButton{background:#1F1F1F; border-radius:20px; font-size:18px;} QPushButton:checked{background:#8B5CF6;}")
+        """            
+        for filename, desc in mood_data:
+            gif_path = str(ASSETS_DIR / filename)
+            
+            # Use new GifButton class
+            b = GifButton(gif_path)
+            b.setFixedSize(44, 44)       # Slightly larger button
+            b.setIconSize(QSize(32, 32)) # Size of the GIF inside
             b.setStyleSheet(emoji_style_new)
             b.setProperty("toast_text", desc)
             b.installEventFilter(self)
+            
             self.mood_group.addButton(b)
             moods_lo.addWidget(b)
-            
+
+        # Note
         self.note_edit = QTextEdit()
         self.note_edit.setPlaceholderText("Anything about today...")
         self.note_edit.setFixedHeight(100)
-        # self.note_edit.setStyleSheet("background:#1A1A1A; border-radius:8px; padding:8px; color:#E0E0E0;")
         self.note_edit.setStyleSheet("""
             QTextEdit {
                 background-color: #1A1A1A;
