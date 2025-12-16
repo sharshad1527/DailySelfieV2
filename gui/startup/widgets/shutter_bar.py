@@ -1,7 +1,10 @@
 from PySide6.QtCore import Qt, QRect, QSize, Signal, QEvent, QObject
 from PySide6.QtWidgets import QWidget, QPushButton, QHBoxLayout
 from PySide6.QtGui import QPainter, QColor, QIcon, QFont
+from pathlib import Path
 
+CURRENT_DIR = Path(__file__).resolve().parent
+ICONS_DIR = CURRENT_DIR.parent.parent.parent / "gui" / "assets" / "icons"
 class ShutterBar(QWidget):
     # Signals
     shutterClicked = Signal()
@@ -28,14 +31,14 @@ class ShutterBar(QWidget):
         # 1. Light Button (Left)
         self.light_btn = QPushButton(self)
         self.light_btn.setCheckable(True)
-        self.light_btn.setIcon(QIcon("gui/assets/icons/light.svg"))
+        self.light_btn.setIcon(QIcon(str(ICONS_DIR / "light.svg")))
         self.light_btn.setIconSize(QSize(24, 24))
         self.light_btn.clicked.connect(self._on_light_clicked)
         self.light_btn.installEventFilter(self)
 
         # 2. Shutter Button (Center)
         self.shutter_btn = QPushButton(self)
-        self.shutter_btn.setIcon(QIcon("gui/assets/icons/shutter.svg"))
+        self.shutter_btn.setIcon(QIcon(str(ICONS_DIR / "shutter.svg")))
         self.shutter_btn.setIconSize(QSize(42, 42)) 
         self.shutter_btn.pressed.connect(self._on_shutter_press)
         self.shutter_btn.released.connect(self._on_shutter_release)
@@ -46,7 +49,7 @@ class ShutterBar(QWidget):
         self.timer_btn = QPushButton(self)
         self.timer_btn.clicked.connect(self._toggle_timer)
         self.timer_btn.installEventFilter(self)
-        self._timer_icon = QIcon("gui/assets/icons/timer.svg") 
+        self._timer_icon = QIcon(str(ICONS_DIR / "timer.svg")) 
 
         # Style capture buttons 
         for btn in (self.light_btn, self.shutter_btn, self.timer_btn):
