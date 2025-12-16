@@ -39,28 +39,32 @@ def cmd_show_paths(paths):
 
 
 def cmd_list_cameras(logger, max_test=8):
+    logger = get_logger("cmd_list_cameras")
     """Debug: List available cameras using OpenCV."""
-    print("\nScanning for cameras...")
+    # print("\nScanning for cameras...")
+    logger.info("Scanning for cameras...", extra={"meta": {"max_test": max_test}})
     try:
         from core.camera import list_cameras
     except Exception as e:
         logger.error("camera_list_failed", extra={"meta": {"error": str(e)}})
-        print(f"Error loading camera module: {e}")
+        # print(f"Error loading camera module: {e}")
         return 3
 
     cams = list_cameras(max_test=max_test, only_available=True)
     if not cams:
-        print("No usable cameras detected.")
+        logger.warning("No usable cameras detected.")
         return 4
 
-    print(f"Found {len(cams)} usable camera(s):")
+    logger.info(f"Found {len(cams)} usable camera(s):")
     for i, res in cams.items():
-        print(f"  [Index {i}] Available: {res.available}, Read OK: {res.read_ok}")
-    print()
+        logger.info(f"[Index {i}] Available: {res.available}, Read OK: {res.read_ok}\n")
+    
     return 0
 
 
 def cmd_capture(paths, cfg, logger, args):
+    logger = get_logger("cmd_capture")
+
     """Action: Take a single photo immediately (Headless Mode)."""
     from core.capture import capture_once
 
@@ -73,7 +77,7 @@ def cmd_capture(paths, cfg, logger, args):
     q = args.quality if args.quality is not None else beh["quality"]
     retake = args.allow_retake or beh["allow_retake"]
 
-    print(f"Capturing with Camera {idx}...")
+    logger.info(f"Capturing with Camera {idx}...")
     
     out = capture_once(
         paths,
@@ -86,26 +90,29 @@ def cmd_capture(paths, cfg, logger, args):
     )
 
     if out.get("success"):
-        print(f"Success! Photo saved to:\n  {out['path']}")
+        logger.info(f"Success! Photo saved to:\n  {out['path']}")
         return 0
     else:
-        print(f"Capture failed: {out.get('error')}")
+        # logger.error("Capture failed:",extra={"meta": {out.get('error')}})
+        logger.error("Capture failed", extra={"meta": {"error": out.get('error')}})
         return 6
 
 
 def cmd_tail_logs(paths, n=20):
     """Debug: Print the last N lines of the JSON log."""
+    logger = get_logger("cmd_tail_logs")
+
     log_path = paths.logs_dir / "dailyselfie.jsonl"
-    print(f"Reading last {n} entries from: {log_path}\n")
+    logger.info(f"Reading last {n} entries from: {log_path}\n")
     
     try:
         logs = read_jsonl_tail(log_path, max_lines=n)
     except Exception as e:
-        print(f"Failed to read logs: {e}")
+        logger.critical(f"Failed to read logs: {e}", exc_info=True)
         return 10
 
     if not logs:
-        print("(Log file is empty or missing)")
+        logger.info("(Log file is empty or missing)")
         return 0
 
     for item in logs:
@@ -259,6 +266,7 @@ def main(argv=None):
     # START UP GUI LAUNCHER 
     # -------------------------------------------------
     if args.start_up:
+        logger = get_logger("startup")
 
         # Determine global retake policy (CLI arg overrides Config)
         beh = cfg.get("behavior", {})
@@ -269,8 +277,8 @@ def main(argv=None):
         has_photo, existing_path = check_if_already_captured(paths)
         
         if has_photo and not final_allow_retake:
-            print(f"Daily Selfie already taken for today: {existing_path}")
-            print("Skipping startup. Use --allow-retake to force open.")
+            logger.warning(f"Daily Selfie already taken for today: {existing_path}")
+            logger.info("Skipping startup. Use --allow-retake to force open.")
             return 0
         # Launch GUI
         from PySide6.QtWidgets import QApplication
