@@ -8,43 +8,77 @@ Provides:
 - init_logger: initialise a root "dailyselfie" logger with RotatingFileHandler
 - get_logger: convenience to fetch child loggers
 - read_jsonl_tail: helper to read the last N JSON objects from a JSONL log file
+- LogContext: Context manager for injecting context into logs (e.g. session_id)
 
 Design notes:
 - Logs are written in UTF-8 JSON lines. Each record contains: ts (ISO UTC), level, logger,
   msg, and optional meta and uuid fields.
-- The module intentionally keeps behavior simple and testable. Consumer code
-  should pass the logs_dir Path resolved by paths.get_app_paths().
-
-Example
--------
-    from logging import init_logger, get_logger, read_jsonl_tail
-    logger = init_logger(Path("/some/app/data/logs"))
-    logger.info("started", extra={"meta": {"os": "linux"}})
-
+- Includes a separate 'dailyselfie.error.jsonl' for ERROR+ logs.
 """
 from __future__ import annotations
 import json
 import logging
 import logging.handlers
+import os
+import contextvars
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-
 DEFAULT_LOG_FILENAME = "dailyselfie.jsonl"
+ERROR_LOG_FILENAME = "dailyselfie.error.jsonl"
 DEFAULT_MAX_BYTES = 5 * 1024 * 1024
 DEFAULT_BACKUP_COUNT = 3
+
+# Global context variable for logging context
+_log_context = contextvars.ContextVar("log_context", default={})
+
+
+class LogContext:
+    """
+    Context manager to inject key-value pairs into all logs within the block.
+
+    Usage:
+        with LogContext(session_id="1234"):
+            logger.info("Doing something") # will have session_id=1234
+    """
+    def __init__(self, **kwargs):
+        self.new_ctx = kwargs
+        self.token = None
+
+    def __enter__(self):
+        ctx = _log_context.get().copy()
+        ctx.update(self.new_ctx)
+        self.token = _log_context.set(ctx)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.token:
+            _log_context.reset(self.token)
 
 
 class JsonLineFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         ts = datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat()
+
         entry: Dict[str, Any] = {
             "ts": ts,
             "level": record.levelname,
             "logger": record.name,
             "msg": record.getMessage(),
+            "pid": os.getpid(),
+            "thread": record.threadName,
         }
+
+        # Add context from LogContext
+        ctx = _log_context.get()
+        if ctx:
+            entry.update(ctx)
+
+        # Add debug info if debug level
+        if record.levelno == logging.DEBUG:
+            entry["func"] = record.funcName
+            entry["line"] = record.lineno
+
         if hasattr(record, "meta") and record.meta:
             entry["meta"] = record.meta
         
@@ -56,11 +90,15 @@ class JsonLineFormatter(logging.Formatter):
         return json.dumps(entry, ensure_ascii=False)
 
 
-def _make_rotating_handler(log_file: Path, max_bytes: int, backup_count: int) -> logging.Handler:
+def _make_rotating_handler(log_file: Path, level: int) -> logging.Handler:
     handler = logging.handlers.RotatingFileHandler(
-        filename=str(log_file), maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"
+        filename=str(log_file),
+        maxBytes=DEFAULT_MAX_BYTES,
+        backupCount=DEFAULT_BACKUP_COUNT,
+        encoding="utf-8"
     )
     handler.setFormatter(JsonLineFormatter())
+    handler.setLevel(level)
     return handler
 
 
@@ -73,20 +111,20 @@ def init_logger(logs_dir: Path, console: bool = True) -> logging.Logger:
     logger.setLevel(logging.DEBUG)
     logger.propagate = False  # Don't double-print to root
 
-    # 1. File Handler (JSONL)
-    log_file = logs_dir / DEFAULT_LOG_FILENAME
-    file_h = logging.handlers.RotatingFileHandler(
-        log_file, maxBytes=DEFAULT_MAX_BYTES, backupCount=DEFAULT_BACKUP_COUNT, encoding="utf-8"
-    )
-    file_h.setFormatter(JsonLineFormatter())
-    file_h.setLevel(logging.DEBUG) # Log EVERYTHING to file
-    logger.addHandler(file_h)
+    # 1. Main File Handler (All logs DEBUG+)
+    main_log = logs_dir / DEFAULT_LOG_FILENAME
+    logger.addHandler(_make_rotating_handler(main_log, logging.DEBUG))
 
-    # 2. Console Handler (Human Readable)
+    # 2. Error File Handler (Only ERROR+)
+    error_log = logs_dir / ERROR_LOG_FILENAME
+    logger.addHandler(_make_rotating_handler(error_log, logging.ERROR))
+
+    # 3. Console Handler (Human Readable)
     if console:
         console_h = logging.StreamHandler()
+        # Simple formatter for console
         console_h.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
-        console_h.setLevel(logging.INFO) # Only INFO+ to terminal
+        console_h.setLevel(logging.INFO)
         logger.addHandler(console_h)
 
     return logger
@@ -156,17 +194,25 @@ def read_jsonl_tail(log_file: Path, max_lines: int = 200) -> List[Dict[str, Any]
     return results
 
 
-# Convenience CLI for quick debugging when executing directly
-if __name__ == "__main__":
-    from pathlib import Path
+def global_exception_hook(exctype, value, tb):
+    """
+    Catch any unhandled exception (bug) and log it before crashing.
+    """
     import sys
+    import traceback
 
-    logs = Path.cwd() / "logs_test"
-    logs.mkdir(parents=True, exist_ok=True)
-    logger = init_logger(logs, console=True)
-    logger.info("logging_test_start", extra={"meta": {"mode": "direct_run"}})
-    print("Wrote a test log to:", logs / DEFAULT_LOG_FILENAME)
-    tail = read_jsonl_tail(logs / DEFAULT_LOG_FILENAME, max_lines=10)
-    print("Last lines:")
-    for r in tail:
-        print(r)
+    # Ignore KeyboardInterrupt (Ctrl+C)
+    if issubclass(exctype, KeyboardInterrupt):
+        sys.__excepthook__(exctype, value, tb)
+        return
+
+    logger = get_logger("crash_handler")
+    logger.critical("Uncaught Exception", exc_info=(exctype, value, tb))
+
+    # We rely on the log file being written.
+    # Since the GUI might be dead, we print to stderr as a backup.
+    sys.stderr.write("!!! CRITICAL CRASH LOGGED !!!\n")
+    traceback.print_exception(exctype, value, tb)
+
+    # Safe exit
+    sys.exit(1)

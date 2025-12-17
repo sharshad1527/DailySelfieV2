@@ -151,45 +151,68 @@ class Indexer:
         One-time import of existing captures.jsonl into sqlite.
         Returns number of rows imported.
         Robust to malformed lines; skips bad lines and continues.
+        Uses a transaction for performance.
         """
         jsonl_path = Path(jsonl_path)
         if not jsonl_path.exists():
             return 0
         count = 0
-        with jsonl_path.open("r", encoding="utf-8") as f:
-            for i, line in enumerate(f, 1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except Exception:
-                    # skip malformed line
-                    continue
-                # Determine id
-                eid = obj.get("id") or (Path(obj.get("path", "")).stem if obj.get("path") else None)
-                if not eid:
-                    # nothing meaningful to import
-                    continue
-                entry = {
-                    "id": eid,
-                    "ts": obj.get("ts"),
-                    "path": obj.get("path"),
-                    "width": obj.get("width"),
-                    "height": obj.get("height"),
-                    "resolution": obj.get("resolution"),
-                    "mood": obj.get("mood"),
-                    "notes": obj.get("notes"),
-                    "action": obj.get("action", obj.get("type", "capture")),
-                }
-                try:
-                    self.add_capture(entry)
-                    count += 1
-                except Exception:
-                    # swallow per-row exceptions but continue
-                    continue
-                if report_every and (i % report_every == 0):
-                    print(f"[indexer] migrated {i} lines...")
+
+        # Start transaction
+        self._conn.execute("BEGIN TRANSACTION")
+
+        try:
+            with jsonl_path.open("r", encoding="utf-8") as f:
+                for i, line in enumerate(f, 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        # skip malformed line
+                        continue
+                    # Determine id
+                    eid = obj.get("id") or (Path(obj.get("path", "")).stem if obj.get("path") else None)
+                    if not eid:
+                        # nothing meaningful to import
+                        continue
+
+                    # Normalize values
+                    now = time.time()
+                    ts = obj.get("ts")
+                    path = obj.get("path")
+                    width = obj.get("width")
+                    height = obj.get("height")
+                    resolution = obj.get("resolution")
+                    mood = obj.get("mood")
+                    notes = obj.get("notes")
+                    action = obj.get("action", obj.get("type", "capture"))
+
+                    try:
+                         # Inline insert to avoid commit() in add_capture per row
+                        self._conn.execute(
+                            """
+                            INSERT OR REPLACE INTO captures
+                            (id, ts, path, width, height, resolution, mood, notes, action, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (eid, ts, path, width, height, resolution, mood, notes, action, now),
+                        )
+                        count += 1
+                    except Exception:
+                        # swallow per-row exceptions but continue
+                        continue
+
+                    if report_every and (i % report_every == 0):
+                        print(f"[indexer] migrated {i} lines...")
+
+            self._conn.commit()
+
+        except Exception:
+            self._conn.rollback()
+            raise
+
         return count
     def get_latest_capture(self) -> Optional[Dict[str, Any]]:
         """Return the most recent capture (by timestamp)."""

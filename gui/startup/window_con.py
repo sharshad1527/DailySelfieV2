@@ -9,8 +9,10 @@ from PySide6.QtWidgets import (
 )
 
 
-# ---------------- Drag Filter --------------------
 class DragFilter(QObject):
+    """
+    Event filter to handle window dragging from a specific widget.
+    """
     def __init__(self, window):
         super().__init__()
         self._window = window
@@ -19,7 +21,7 @@ class DragFilter(QObject):
     def eventFilter(self, obj, event):
         if event.type() == QEvent.MouseButtonPress:
             if event.button() == Qt.LeftButton:
-                # position() is local → convert properly
+                # position() is local -> convert properly
                 self._drag_offset = event.position().toPoint()
                 return False  # IMPORTANT: allow button clicks
 
@@ -36,8 +38,10 @@ class DragFilter(QObject):
         return False
 
 
-# ---------------- Frameless Window ----------------
 class BaseFramelessWindow(QMainWindow):
+    """
+    A base class for frameless windows with a custom title bar and rounded corners.
+    """
     def __init__(self, width=900, height=520):
         super().__init__()
 
@@ -66,7 +70,6 @@ class BaseFramelessWindow(QMainWindow):
         # ---------------- Top Bar ----------------
         self._top_bar = QWidget(self._root)
         self._top_bar.setFixedHeight(42)
-
         self._top_bar.setStyleSheet("background: transparent;")
 
         # Install drag filter (THIS is the key)
