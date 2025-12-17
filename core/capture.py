@@ -88,8 +88,10 @@ def commit_capture_from_bytes(
         from core.index_api import get_api
         api = get_api(app_paths)
         api.record_capture(index_entry)
-    except Exception:
+    except Exception as e:
         # Fallback
+        if logger:
+            logger.warning(f"Database record failed, falling back to JSONL: {e}")
         try:
             append_capture_index(Path(app_paths.data_dir) / "captures.jsonl", index_entry)
             write_meta(Path(app_paths.data_dir), id_token, {"id": id_token, "mood": mood, "notes": notes})

@@ -25,9 +25,20 @@ def _is_safe_to_delete(path: Path) -> bool:
     forbidden = {Path("/"), Path.home(), Path("/usr"), Path("/usr/local")}
     try:
         resolved = path.resolve()
+
+        # 1. Check against hardcoded forbidden paths
         for bad in forbidden:
             if resolved == bad:
                 return False
+
+        # 2. Prevent deleting the project root itself if running from source.
+        #    This happens if the user installs into the current directory.
+        #    We define "project root" as the parent of this file's folder (core/).
+        project_root = Path(__file__).resolve().parent.parent
+        if resolved == project_root:
+            print(f"Safety Check: Cannot delete project root ({resolved})")
+            return False
+
     except Exception:
         return False
     return True

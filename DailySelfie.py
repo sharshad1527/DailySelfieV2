@@ -41,7 +41,6 @@ def cmd_show_paths(paths):
 def cmd_list_cameras(logger, max_test=8):
     logger = get_logger("cmd_list_cameras")
     """Debug: List available cameras using OpenCV."""
-    # print("\nScanning for cameras...")
     logger.info("Scanning for cameras...", extra={"meta": {"max_test": max_test}})
     try:
         from core.camera import list_cameras
@@ -123,36 +122,12 @@ def cmd_tail_logs(paths, n=20):
         print(f"[{ts}] {level}: {msg}")
     return 0
 
-    #---------------------------------
-    # DEFINE THE GLOBAL CRASH HANDLER
-    #---------------------------------
-def global_exception_hook(exctype, value, tb):
-    """
-    Catch any unhandled exception (bug) and log it before crashing.
-    """
-    # Ignore KeyboardInterrupt (Ctrl+C)
-    if issubclass(exctype, KeyboardInterrupt):
-        sys.__excepthook__(exctype, value, tb)
-        return
-
-    logger = get_logger("crash_handler")
-    logger.critical("Uncaught Exception", exc_info=(exctype, value, tb))
-    
-    # We rely on the log file being written. 
-    # Since the GUI might be dead, we print to stderr as a backup.
-    sys.stderr.write("!!! CRITICAL CRASH LOGGED !!!\n")
-    traceback.print_exception(exctype, value, tb)
-    
-    # Optional: If you want to try restarting:
-    # os.execl(sys.executable, sys.executable, *sys.argv)
-    # For now, safe exit:
-    sys.exit(1)
-
 # ---------------------------------------------------------
 # Main Entry Point
 # ---------------------------------------------------------
 def main(argv=None):
     # REGISTER THE HOOK IMMEDIATELY
+    from core.logging import global_exception_hook
     sys.excepthook = global_exception_hook
 
     argv = argv if argv is not None else sys.argv[1:]

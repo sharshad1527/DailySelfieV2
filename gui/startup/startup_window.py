@@ -1,134 +1,97 @@
 import logging
 import sys
+from pathlib import Path
+
 from PySide6.QtCore import Qt, QByteArray, QBuffer, QIODevice, QSize, QTimer, QEvent
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, 
     QPushButton, QTextEdit, QButtonGroup, QGridLayout,
     QGraphicsOpacityEffect
 )
-from PySide6.QtGui import QPixmap, QImage, QPainter, QPainterPath, QFont, QMovie, QIcon
+from PySide6.QtGui import QPixmap, QImage, QPainter, QPainterPath, QFont
 
+# Core
+from core.capture import commit_capture_from_bytes
+from core.index_api import get_api
+from core.logging import get_logger
+from core.config import ensure_config, apply_config_to_paths, write_config
+from core.paths import get_app_paths
+
+# GUI Components
 from gui.startup.window_con import BaseFramelessWindow
 from gui.startup.widgets.ghost_slider import GhostOpacitySlider
 from gui.startup.widgets.shutter_bar import ShutterBar
+from gui.startup.widgets.gif_button import GifButton
 from gui.startup.camera.preview import CameraPreviewThread
-from core.capture import commit_capture_from_bytes
-from core.index_api import get_api
-
-from core.logging import get_logger
 from gui.qt_logging import QtSignalingHandler, install_qt_logger
 from gui.widgets.error_popup import ErrorToast
 
-class GifButton(QPushButton):
-    def __init__(self, gif_path, parent=None):
-        super().__init__(parent)
-        self.setCheckable(True)
-        self.setCursor(Qt.PointingHandCursor)
-        
-        # Load the GIF
-        self.movie = QMovie(gif_path)
-        # Verify the GIF is valid
-        if not self.movie.isValid():
-            print(f"Warning: Could not load GIF at {gif_path}")
-            
-        # Connect frame changes to the button icon
-        self.movie.frameChanged.connect(self._update_icon)
-        
-        # Start in 'stopped' state (Frame 0)
-        self.movie.jumpToFrame(0)
-        self._update_icon()
-
-        # Connect internal toggle signal
-        self.toggled.connect(self._check_playback_state)
-
-    def _update_icon(self):
-        # Updates the button icon with the current GIF frame.
-        pix = self.movie.currentPixmap()
-        self.setIcon(QIcon(pix))
-
-    def _check_playback_state(self):
-        # Decides whether to play or stop based on Hover & Check state.
-        should_play = self.underMouse() or self.isChecked()
-        
-        if should_play:
-            if self.movie.state() != QMovie.Running:
-                self.movie.start()
-        else:
-            self.movie.stop()
-            self.movie.jumpToFrame(0) # Reset to start
-            self._update_icon()
-
-    # --- Event Overrides for Hover Effects ---
-    def enterEvent(self, event):
-        self._check_playback_state()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self._check_playback_state()
-        super().leaveEvent(event)
 
 class StartupWindow(BaseFramelessWindow):
+    """
+    Main startup window for Daily Selfie.
+    Handles camera preview, ghost overlay, countdown, and capture.
+    """
     def __init__(self, allow_retake=False):
         super().__init__(width=1000, height=560)
 
-        install_qt_logger() # Catch Qt internal errors
-
-        self.log_handler = QtSignalingHandler()
-        self.log_handler.setLevel(logging.WARNING) # Only show Warnings/Errors in Popup
-        
-        # Attach to root logger
-        root_logger = get_logger()
-        root_logger.addHandler(self.log_handler)
-        
-        # Connect Signal -> Popup
-        self.log_handler.emitter.new_log.connect(self._on_log_received)
-        
-        # Store the override
         self._force_allow_retake = allow_retake
 
-        # ---------- Paths & Config Setup ----------
-        from core.config import ensure_config, apply_config_to_paths, write_config
-        from core.paths import get_app_paths
+        self._setup_logging()
+        self._setup_paths_and_config()
+        self._setup_database()
+
+        # State Initialization
+        self._current_qimage = None
+        self._raw_ghost_image = None
+        self._preview_thread = None
+        self._countdown_remaining = 0
+
+        initial_timer = self.config.get("behavior", {}).get("timer_duration", 0)
+        self._setup_countdown_timer()
+
+        # UI Initialization
+        self._build_content_ui(initial_timer)
+        self._load_last_photo()
+        self._setup_flash_overlay()
+        self._connect_signals()
+
+    def _setup_logging(self):
+        install_qt_logger()
+        self.log_handler = QtSignalingHandler()
+        self.log_handler.setLevel(logging.WARNING)
         
+        root_logger = get_logger()
+        root_logger.addHandler(self.log_handler)
+        self.log_handler.emitter.new_log.connect(self._on_log_received)
+
+    def _setup_paths_and_config(self):
         bootstrap_paths = get_app_paths("DailySelfie", ensure=False)
         self.config_path = bootstrap_paths.config_dir / "config.toml"
-        
         self.config = ensure_config(bootstrap_paths.config_dir)
         self.paths = apply_config_to_paths(bootstrap_paths, self.config)
         
         for p in (self.paths.data_dir, self.paths.photos_root, self.paths.logs_dir):
             p.mkdir(parents=True, exist_ok=True)
 
-        # ---------- Backend API ----------
+    def _setup_database(self):
         self.index_api = get_api(self.paths)
-        
         idx = self.index_api._ensure_indexer()
         if idx.count_rows() == 0:
             print("Migrating history from captures.jsonl...")
             self.index_api.migrate_if_needed()
 
-        # ---------- State ----------
-        self._current_qimage = None 
-        self._raw_ghost_image = None 
-        self._preview_thread = None
-        
-        initial_timer = self.config.get("behavior", {}).get("timer_duration", 0)
-        
+    def _setup_countdown_timer(self):
         self._countdown_timer = QTimer(self)
         self._countdown_timer.timeout.connect(self._on_countdown_tick)
-        self._countdown_remaining = 0
 
-        # ---------- UI ----------
-        self._build_content_ui(initial_timer)
-        self._load_last_photo()
-
-        # Flash Overlay
+    def _setup_flash_overlay(self):
         self.flash_overlay = QWidget(self)
         self.flash_overlay.setStyleSheet("background-color: white;")
         self.flash_overlay.hide()
         self.flash_overlay.setAttribute(Qt.WA_TransparentForMouseEvents)
 
-        # Signals
+    def _connect_signals(self):
         self.shutter_bar.shutterClicked.connect(self._on_shutter_clicked)
         self.shutter_bar.saveClicked.connect(self._on_save)
         self.shutter_bar.retakeClicked.connect(self._on_retake)
@@ -136,29 +99,20 @@ class StartupWindow(BaseFramelessWindow):
         self.shutter_bar.hoverStatus.connect(self._update_toast)
         self.ghost_slider.hoverStatus.connect(self._update_toast)
         self.ghost_slider.valueChanged.connect(self._on_ghost_opacity_change)
-    def _on_log_received(self, log_entry):
-        """Called when a log message is emitted."""
-        level = log_entry["level"]
-        msg = log_entry["msg"]
-        exc = log_entry.get("exc")
 
-        # Create the popup relative to this window
-        popup = ErrorToast(self, level=level, message=msg, traceback=exc)
-        
-        # Center it nicely
-        geo = self.geometry()
-        x = geo.x() + (geo.width() - popup.width()) // 2
-        y = geo.y() + (geo.height() - popup.height()) // 2
-        popup.move(x, y)
-        
-        popup.show()
-
+    # ---------------------------------------------------------
+    # UI Building
+    # ---------------------------------------------------------
     def _build_content_ui(self, initial_timer):
         root = QHBoxLayout(self._content)
         root.setContentsMargins(0,0,0,0)
         root.setSpacing(16)
 
-        # --- LEFT ---
+        root.addWidget(self._build_left_panel(), 0)
+        root.addWidget(self._build_center_panel(), 5)
+        root.addWidget(self._build_right_panel(initial_timer), 2)
+
+    def _build_left_panel(self):
         left = QWidget()
         left.setFixedWidth(90)
         left_layout = QVBoxLayout(left)
@@ -167,8 +121,9 @@ class StartupWindow(BaseFramelessWindow):
         self.ghost_slider = GhostOpacitySlider()
         left_layout.addWidget(QLabel("Ghost", styleSheet="color:#B0B0B0; margin-left:34px;"))
         left_layout.addWidget(self.ghost_slider, 1, Qt.AlignLeft)
+        return left
 
-        # --- CENTER ---
+    def _build_center_panel(self):
         center = QWidget()
         center_layout = QVBoxLayout(center)
         center_layout.setContentsMargins(0,0,0,0)
@@ -200,8 +155,9 @@ class StartupWindow(BaseFramelessWindow):
         stack_layout.addWidget(self.countdown_lbl, 0, 0)
 
         center_layout.addWidget(self.preview_container, 1)
+        return center
 
-        # --- RIGHT ---
+    def _build_right_panel(self, initial_timer):
         right = QWidget()
         right_layout = QVBoxLayout(right)
         
@@ -209,7 +165,7 @@ class StartupWindow(BaseFramelessWindow):
         self.mood_group = QButtonGroup(self)
         moods_lo = QHBoxLayout()
         moods_lo.setSpacing(12)
-        from pathlib import Path
+
         ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "icons" / "mood"
         mood_data = [
             ("cool.gif", "Great"), 
@@ -219,7 +175,7 @@ class StartupWindow(BaseFramelessWindow):
             ("sosad.gif", "Awful")
         ]
 
-        emoji_style_new = """
+        emoji_style = """
             QPushButton {
                 background-color: transparent;
                 border: 2px solid #1F1F1F;
@@ -235,12 +191,10 @@ class StartupWindow(BaseFramelessWindow):
         """            
         for filename, desc in mood_data:
             gif_path = str(ASSETS_DIR / filename)
-            
-            # Use new GifButton class
             b = GifButton(gif_path)
-            b.setFixedSize(44, 44)       # Slightly larger button
-            b.setIconSize(QSize(32, 32)) # Size of the GIF inside
-            b.setStyleSheet(emoji_style_new)
+            b.setFixedSize(44, 44)
+            b.setIconSize(QSize(32, 32))
+            b.setStyleSheet(emoji_style)
             b.setProperty("toast_text", desc)
             b.installEventFilter(self)
             
@@ -267,7 +221,6 @@ class StartupWindow(BaseFramelessWindow):
                 border: 2px solid #8B5CF6;
                 background-color: #1F1F1F;
             }
-            
         """)
         
         self.toast_msg = QLabel("")
@@ -276,7 +229,6 @@ class StartupWindow(BaseFramelessWindow):
         self.toast_msg.setStyleSheet("background: transparent; color: transparent;")
 
         self.shutter_bar = ShutterBar(initial_timer=initial_timer)
-        
 
         right_layout.addWidget(QLabel("Mood", styleSheet="color:#B0B0B0"))
         right_layout.addLayout(moods_lo)
@@ -288,22 +240,33 @@ class StartupWindow(BaseFramelessWindow):
         right_layout.addSpacing(8)
         right_layout.addWidget(self.shutter_bar, alignment=Qt.AlignCenter)
         right_layout.addStretch()
+        return right
 
-        root.addWidget(left, 0)
-        root.addWidget(center, 5)
-        root.addWidget(right, 2)
+    # ---------------------------------------------------------
+    # Logic & Events
+    # ---------------------------------------------------------
+    def _on_log_received(self, log_entry):
+        level = log_entry["level"]
+        msg = log_entry["msg"]
+        exc = log_entry.get("exc")
+
+        popup = ErrorToast(self, level=level, message=msg, traceback=exc)
+
+        geo = self.geometry()
+        x = geo.x() + (geo.width() - popup.width()) // 2
+        y = geo.y() + (geo.height() - popup.height()) // 2
+        popup.move(x, y)
+        popup.show()
 
     def _load_last_photo(self):
         try:
             entry = self.index_api.get_last_photo()
             if entry and entry.get("path"):
-                from pathlib import Path
                 p = Path(entry["path"])
                 if p.exists():
                     img = QImage(str(p))
                     if not img.isNull():
                         self._raw_ghost_image = img.convertToFormat(QImage.Format_Grayscale8)
-                        # We try to update visuals here, but it might fail if window is size 0
                         self._update_ghost_visuals()
         except Exception as e:
             print(f"Ghost load error: {e}")
@@ -318,6 +281,10 @@ class StartupWindow(BaseFramelessWindow):
         self.ghost_effect.setOpacity(value / 100.0)
 
     def _process_image_for_display(self, source_image):
+        """
+        Scales and rounds the corners of the image.
+        Optimized to fail fast if dimensions are invalid.
+        """
         container_w = self.preview_lbl.width()
         container_h = self.preview_lbl.height()
         if container_w <= 0 or container_h <= 0: return None
@@ -327,6 +294,9 @@ class StartupWindow(BaseFramelessWindow):
         target_h = container_h - (margin * 2)
         if target_w <= 0: return None
 
+        # Scale
+        # Note: Optimization could be done here by caching the scaled pixmap
+        # if the container size hasn't changed, but for a live preview we need to redraw.
         pix = QPixmap.fromImage(source_image)
         scaled = pix.scaled(QSize(target_w, target_h), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
         
@@ -340,6 +310,7 @@ class StartupWindow(BaseFramelessWindow):
         painter = QPainter(final_pix)
         painter.setRenderHint(QPainter.Antialiasing)
         
+        # Draw rounded rect mask
         path = QPainterPath()
         path.addRoundedRect(margin, margin, target_w, target_h, 12, 12)
         
@@ -383,8 +354,6 @@ class StartupWindow(BaseFramelessWindow):
     def showEvent(self, event):
         super().showEvent(event)
         self._start_preview()
-        
-        # [FIX] Force ghost update now that window is visible
         if self._raw_ghost_image:
             self._update_ghost_visuals()
 
@@ -393,7 +362,6 @@ class StartupWindow(BaseFramelessWindow):
             current_timer = self.shutter_bar.get_timer_value()
             if self.config["behavior"].get("timer_duration") != current_timer:
                 self.config["behavior"]["timer_duration"] = current_timer
-                from core.config import write_config
                 write_config(self.config_path, self.config)
         except Exception:
             pass
@@ -497,7 +465,7 @@ class StartupWindow(BaseFramelessWindow):
 
         beh = self.config.get("behavior", {})
         
-        # [FIX] Use the override if present, otherwise fall back to config
+        # Use the override if present, otherwise fall back to config
         effective_allow_retake = self._force_allow_retake or beh.get("allow_retake", False)
 
         result = commit_capture_from_bytes(

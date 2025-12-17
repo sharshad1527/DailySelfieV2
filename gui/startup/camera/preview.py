@@ -1,7 +1,9 @@
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtGui import QImage
 import time
 from core.camera import Camera
+import cv2
+import numpy as np
 
 class CameraPreviewThread(QThread):
     frame_ready = Signal(QImage)
@@ -12,18 +14,22 @@ class CameraPreviewThread(QThread):
         self.camera_index = camera_index
         self.width = width
         self.height = height
+        self._target_interval = 1.0 / fps
         self._running = False
 
     def run(self):
         self._running = True
         consecutive_errors = 0
-        max_retries = 50  # Allow 50 failed frames (approx 2-3 seconds of warm-up)
+        max_retries = 50
 
         try:
             with Camera(index=self.camera_index, width=self.width, height=self.height) as cam:
                 # Camera opened successfully, now enter the read loop
+                # Warmup
                 time.sleep(0.3)
+
                 while self._running:
+                    start_time = time.time()
                     try:
                         frame = cam.read_frame()
                         
@@ -31,28 +37,36 @@ class CameraPreviewThread(QThread):
                         consecutive_errors = 0
                         
                         h, w, ch = frame.shape
-                        rgb = frame[:, :, ::-1].copy()
+                        bytes_per_line = ch * w
                         
-                        qt_img = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
-                        self.frame_ready.emit(qt_img.copy())
+                        # Convert BGR to RGB efficiently
+                        # We create a new array here, but avoiding double copies where possible
+                        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         
-                        time.sleep(0.03)
+                        # Create QImage from data.
+                        # QImage(data, w, h, fmt) references data, so we must ensure 'rgb' stays alive
+                        # OR we copy it. Since we emit it across threads, .copy() is required eventually.
+                        # The most efficient way for thread safety is QImage(rgb.data, ...).copy()
+                        qt_img = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
+
+                        self.frame_ready.emit(qt_img)
+
+                        # Calculate sleep to maintain target FPS
+                        elapsed = time.time() - start_time
+                        sleep_time = max(0.001, self._target_interval - elapsed)
+                        time.sleep(sleep_time)
 
                     except Exception as e:
-                        # Don't crash immediately. Count errors.
                         consecutive_errors += 1
                         
-                        # If we just started or it's a hiccup, wait a bit and retry
                         if consecutive_errors < max_retries:
-                            time.sleep(0.1)  # Give the camera 100ms to wake up
+                            time.sleep(0.1)
                             continue
                         
-                        # Only give up if it fails consistently
                         self.error_occurred.emit(f"Stream died: {e}")
                         break
 
         except Exception as e:
-            # This handles if the camera device itself cannot be opened (e.g. index not found)
             self.error_occurred.emit(f"Camera open failed: {e}")
 
     def stop(self):

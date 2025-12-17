@@ -126,6 +126,13 @@ class Camera:
                 self._cap = None
 
         if not self._cap or not self._cap.isOpened():
+            # Ensure we release if it was somehow created but not opened properly
+            if self._cap:
+                try:
+                    self._cap.release()
+                except Exception:
+                    pass
+            self._cap = None
             raise RuntimeError(f"Failed to open camera index {self.index}")
 
         if self.width:

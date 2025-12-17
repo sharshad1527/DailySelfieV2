@@ -49,7 +49,11 @@ def _prompt_int(question: str, default: int, allow_empty: bool = False):
         if allow_empty and ans.lower() in ("none", "null"):
             return None
         try:
-            return int(ans)
+            val = int(ans)
+            if val < 0:
+                 print("Please enter a positive number.")
+                 continue
+            return val
         except ValueError:
             print("Please enter a valid number.")
 
@@ -69,6 +73,14 @@ def _expand(p: str) -> Path:
 # ---------------------------------------------------------
 def run_install(config_dir: Path, requirements_path: Path | None = None) -> None:
     print("\n=== DailySelfie Interactive Installer ===\n")
+
+    # If requirements_path isn't provided, try to find it relative to this file's package
+    if requirements_path is None:
+        # Assuming core/installer.py -> ../requirements.txt
+        # If installer.py is in core/, parent is root.
+        candidate = Path(__file__).resolve().parent.parent / "requirements.txt"
+        if candidate.exists():
+            requirements_path = candidate
 
     # IMPORTANT: deep copy
     cfg = copy.deepcopy(DEFAULT_CONFIG)
