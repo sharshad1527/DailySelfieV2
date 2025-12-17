@@ -1,8 +1,33 @@
 from PySide6.QtCore import Qt, QRect, QSize, Signal, QEvent, QObject
 from PySide6.QtWidgets import QWidget, QPushButton, QHBoxLayout
-from PySide6.QtGui import QPainter, QColor, QIcon, QFont
+from PySide6.QtGui import QPainter, QColor, QIcon, QFont, QPen
 from pathlib import Path
 
+retake_style = """
+            QPushButton {
+            background-color: #3A3A3A;
+            border-radius: 27px;
+            color: #E0E0E0;
+            font-size: 24px;
+            font-weight: bold;
+            }
+
+            QPushButton:hover {
+            background-color: #4A4A4A;
+            color: white;
+            }
+            """
+save_style = """QPushButton {
+        background-color: #8B5CF6;
+        border-radius: 27px;
+        color: white;
+        font-size: 24px;
+        font-weight: bold;
+        }
+        QPushButton:hover {
+        background-color: #7C3AED;
+        }
+"""
 CURRENT_DIR = Path(__file__).resolve().parent
 ICONS_DIR = CURRENT_DIR.parent.parent.parent / "gui" / "assets" / "icons"
 class ShutterBar(QWidget):
@@ -50,6 +75,7 @@ class ShutterBar(QWidget):
         self.timer_btn.clicked.connect(self._toggle_timer)
         self.timer_btn.installEventFilter(self)
         self._timer_icon = QIcon(str(ICONS_DIR / "timer.svg")) 
+        
 
         # Style capture buttons 
         for btn in (self.light_btn, self.shutter_btn, self.timer_btn):
@@ -71,8 +97,8 @@ class ShutterBar(QWidget):
         self.btn_save.clicked.connect(self.saveClicked.emit)
         self.btn_save.installEventFilter(self)
 
-        self.btn_retake.setStyleSheet("QPushButton { background-color: #3A3A3A; border-radius: 27px; color: #E0E0E0; font-size: 24px; font-weight: bold; } QPushButton:hover { background-color: #4A4A4A; color: white; }")
-        self.btn_save.setStyleSheet("QPushButton { background-color: #8B5CF6; border-radius: 27px; color: white; font-size: 24px; font-weight: bold; } QPushButton:hover { background-color: #7C3AED; }")
+        self.btn_retake.setStyleSheet(retake_style)
+        self.btn_save.setStyleSheet(save_style)
 
         self.review_layout.addWidget(self.btn_retake)
         self.review_layout.addWidget(self.btn_save)

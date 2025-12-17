@@ -276,6 +276,7 @@ class StartupWindow(BaseFramelessWindow):
         self.toast_msg.setStyleSheet("background: transparent; color: transparent;")
 
         self.shutter_bar = ShutterBar(initial_timer=initial_timer)
+        
 
         right_layout.addWidget(QLabel("Mood", styleSheet="color:#B0B0B0"))
         right_layout.addLayout(moods_lo)
