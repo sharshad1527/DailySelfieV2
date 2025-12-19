@@ -102,14 +102,17 @@ class BaseFramelessWindow(QMainWindow):
         close_btn.clicked.connect(self.close)
         close_btn.setStyleSheet("""
             QPushButton {
-                background: transparent;
-                color: #B0B0B0;
-                border: none;
+                background-color: transparent;
+                border: 2px solid #333333;
+                border-radius:10px;
+                font-weight: bold;
+                font-size: 14px;
             }
             QPushButton:hover {
-                background-color: #2A2A2A;
-                border-radius: 6px;
-                color: white;
+                border: 2px solid #E74C3C;
+            }
+            QPushButton:pressed {
+                background-color: #A93226;
             }
         """)
 
