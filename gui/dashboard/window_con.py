@@ -28,7 +28,25 @@ class ResizeGrip(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.drag_pos = event.globalPosition().toPoint()
+            win = self.window()
+            
+            # Map Qt.Corner values to Qt.Edge flags for startSystemResize
+            edges = self.edge
+            if self.edge == Qt.TopLeftCorner:
+                edges = Qt.TopEdge | Qt.LeftEdge
+            elif self.edge == Qt.TopRightCorner:
+                edges = Qt.TopEdge | Qt.RightEdge
+            elif self.edge == Qt.BottomLeftCorner:
+                edges = Qt.BottomEdge | Qt.LeftEdge
+            elif self.edge == Qt.BottomRightCorner:
+                edges = Qt.BottomEdge | Qt.RightEdge
+
+            # Attempt system resize first (smoother, handles OS snapping)
+            if win.windowHandle().startSystemResize(edges):
+                return
+            
+            self.start_pos = event.globalPosition().toPoint()
+            self.start_geo = win.geometry()
             event.accept()
 
     def mouseReleaseEvent(self, event):
@@ -39,17 +57,16 @@ class ResizeGrip(QWidget):
         if self.drag_pos:
             delta = event.globalPosition().toPoint() - self.drag_pos
             self._resize_window(delta)
-            self.drag_pos = event.globalPosition().toPoint()
             event.accept()
 
     def _resize_window(self, delta):
         win = self.window()
         if win.isMaximized(): return 
         
-        geo = win.geometry()
-        x, y, w, h = geo.x(), geo.y(), geo.width(), geo.height()
+        # Use stored start geometry for stable resizing
+        x, y, w, h = self.start_geo.x(), self.start_geo.y(), self.start_geo.width(), self.start_geo.height()
         dx, dy = delta.x(), delta.y()
-    
+
         if self.edge == Qt.LeftEdge:
             x += dx; w -= dx
         elif self.edge == Qt.RightEdge:
@@ -93,30 +110,9 @@ class DashboardShell(QMainWindow):
         """)
 
         # Main Top Bar
-        
-
-        # 2. Main Layout (Horizontal split)
-        self._root_layout = QHBoxLayout(self._container)
-        self._root_layout.setContentsMargins(0, 0, 0, 0)
-        self._root_layout.setSpacing(0)
-
-        # Left Side: Navigation Container
-        # self._nav_container = QWidget()
-        # self._nav_container.setFixedWidth(240) 
-        # self._nav_container.setStyleSheet("""
-        #     background-color: #181818; 
-        #     border-right: 1px solid #2A2A2A; 
-        #     border-top-left-radius: 12px; 
-        #     border-bottom-left-radius: 12px;
-        # """)
-        # self._root_layout.addWidget(self._nav_container)
-
-        # Right Side: Vertical (Top Bar + Content)
-        self._right_side = QWidget()
-        self._right_layout = QVBoxLayout(self._right_side)
-        self._right_layout.setContentsMargins(0, 0, 0, 0)
-        self._right_layout.setSpacing(0)
-        self._root_layout.addWidget(self._right_side)
+        self.root_layout = QVBoxLayout(self._container)
+        self.root_layout.setContentsMargins(0, 0, 0, 0)
+        self.root_layout.setSpacing(0)
 
         # --- Top Bar (Draggable) --- #
         self._top_bar = QWidget()
@@ -136,11 +132,12 @@ class DashboardShell(QMainWindow):
          
 
         self._add_window_controls()
-        self._right_layout.addWidget(self._top_bar)
+        self.root_layout.addWidget(self._top_bar)
 
         # --- Content Area --- #
         self._content = QWidget()
-        self._right_layout.addWidget(self._content, 1)
+        self.root_layout.addWidget(self._content)
+
 
         # --- Resize Grips --- #
         self._grips = []
@@ -217,6 +214,7 @@ class DashboardShell(QMainWindow):
         """)
 
         self._top_bar_layout.insertWidget(0, title)
+        # self._top_bar_layout.addWidget(0, title)
 
         self._top_bar_layout.addWidget(btn_min)
         self._top_bar_layout.addWidget(self.btn_max)
@@ -226,12 +224,9 @@ class DashboardShell(QMainWindow):
         if self.isMaximized():
             self.showNormal()
             self._container.setStyleSheet(self._container.styleSheet().replace("border-radius: 0px;", "border-radius: 12px;"))
-            self._nav_container.setStyleSheet(self._nav_container.styleSheet().replace("border-top-left-radius: 0px;", "border-top-left-radius: 12px;"))
         else:
             self.showMaximized()
             self._container.setStyleSheet(self._container.styleSheet().replace("border-radius: 12px;", "border-radius: 0px;"))
-            # OLD NAVIGATION BAR
-            # self._nav_container.setStyleSheet(self._nav_container.styleSheet().replace("border-top-left-radius: 12px;", "border-top-left-radius: 0px;"))
 
     def _setup_resize_grips(self):
         self._grips.append(ResizeGrip(self, Qt.LeftEdge))
@@ -246,16 +241,13 @@ class DashboardShell(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         rect = self.rect()
-        d = 6
-
+        d = 10
         self._grips[0].setGeometry(0, d, d, rect.height()-2*d) 
         self._grips[1].setGeometry(rect.width()-d, d, d, rect.height()-2*d)
         self._grips[2].setGeometry(d, 0, rect.width()-2*d, d)
         self._grips[3].setGeometry(d, rect.height()-d, rect.width()-2*d, d)
-        
         self._grips[4].setGeometry(0, 0, d, d) 
         self._grips[5].setGeometry(rect.width()-d, 0, d, d) 
         self._grips[6].setGeometry(0, rect.height()-d, d, d) 
         self._grips[7].setGeometry(rect.width()-d, rect.height()-d, d, d) 
-        
         for g in self._grips: g.raise_()
