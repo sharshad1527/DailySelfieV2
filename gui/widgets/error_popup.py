@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QPushButton, 
-    QHBoxLayout, QFrame, QGraphicsDropShadowEffect
+    QHBoxLayout, QFrame, QGraphicsDropShadowEffect, QTextEdit
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QGuiApplication, QColor
@@ -109,9 +109,21 @@ class ErrorToast(QDialog):
         content_layout.addWidget(lbl_title)
 
         # Message
-        lbl_msg = QLabel(message)
+        lbl_msg = QTextEdit(message)
+        lbl_msg.setStyleSheet("""QTextEdit {
+                background-color: #1A1A1A;
+                border: 2px solid transparent;
+                border-radius: 8px;
+                padding: 8px;
+                color: #E0E0E0;
+            }
+            QTextEdit:focus {
+                border: 2px solid #333333;
+                background-color: #1F1F1F;
+            }
+        """)
         lbl_msg.setObjectName("Message")
-        lbl_msg.setWordWrap(True)
+        lbl_msg.setReadOnly(True)
         lbl_msg.setMaximumWidth(320)
         content_layout.addWidget(lbl_msg)
 
@@ -150,3 +162,17 @@ class ErrorToast(QDialog):
     def _reset_copy_btn(self, btn, text):
         btn.setText(text)
         btn.setEnabled(True)
+
+# Smoke Test
+if __name__ == "__main__":
+    from PySide6.QtWidgets import QApplication
+    import sys
+
+    app = QApplication(sys.argv)
+    popup = ErrorToast(level="CRITICAL", message="Direct Test: If you see this, the popup UI is working.", traceback="Fake Traceback:\n  File 'test.py', line 42\n    broken()\nError: This is a simulated crash.")
+
+    popup.show()
+    sys.exit(app.exec())
+
+
+    
