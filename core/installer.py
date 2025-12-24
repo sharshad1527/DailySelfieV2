@@ -57,6 +57,16 @@ def _prompt_int(question: str, default: int, allow_empty: bool = False):
         except ValueError:
             print("Please enter a valid number.")
 
+def _prompt_choice(question: str, choices: list[str], default: str) -> str:
+    choices_str = "/".join(choices)
+    while True:
+        ans = input(f"{question} [{choices_str}] (default: {default}): ").strip().lower()
+        if not ans:
+            return default
+        if ans in choices:
+            return ans
+        print(f"Please choose one of: {choices_str}")
+
 
 def _prompt_path(question: str, default: str) -> str:
     ans = input(f"{question} [{default}]: ").strip()
@@ -86,6 +96,7 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
     cfg = copy.deepcopy(DEFAULT_CONFIG)
     inst = cfg["installation"]
     beh = cfg["behavior"]
+    theme = cfg["theme"]
 
     print("Default installation plan:\n")
     print(f" Install directory : {inst['install_dir']}")
@@ -102,6 +113,11 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
     print()
     print(f" Autostart         : {inst['autostart']}")
     print()
+    print(" Theme settings:")
+    print(f"  Theme name       : {theme['name']}")
+    print(f"  Color mode       : {theme['mode']}")
+    print(f"  Contrast level   : {theme['contrast']}")
+    print()
 
     if _prompt_bool("Do you want to change any of these settings?", False):
         inst["install_dir"] = _prompt_path("Install directory", inst["install_dir"])
@@ -117,6 +133,20 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
 
         inst["autostart"] = _prompt_bool("Start DailySelfie automatically on login?", False)
 
+        print("\nTheme preferences:\n")
+
+        theme["mode"] = _prompt_choice(
+            "Preferred color mode",
+            ["dark", "light"],
+            theme.get("mode", "dark"),
+        )
+
+        theme["contrast"] = _prompt_choice(
+            "Preferred contrast level",
+            ["standard", "medium", "high"],
+            theme.get("contrast", "standard"),
+        )
+
     print("\nFinal installation plan:\n")
     print(f" Install directory : {inst['install_dir']}")
     print(f" Venv directory    : {inst['venv_dir']}")
@@ -125,6 +155,11 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
     print(f" Logs directory    : {inst['logs_dir']}")
     print()
     print(f" Autostart         : {inst['autostart']}")
+    print()
+    print(" Theme settings:")
+    print(f"  Theme name       : {theme['name']}")
+    print(f"  Color mode       : {theme['mode']}")
+    print(f"  Contrast level   : {theme['contrast']}")
     print()
 
     if not _prompt_bool("Proceed with installation?", True):
