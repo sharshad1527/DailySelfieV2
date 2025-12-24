@@ -161,6 +161,16 @@ def main(argv=None):
     grp_run.add_argument("--list-cameras", action="store_true", help="Scan and list available video devices")
     grp_run.add_argument("--tail-logs", type=int, nargs="?", const=20, metavar="N", help="Show last N log entries (default: 20)")
 
+    # Group: Theme
+    grp_theme = parser.add_argument_group("Theme Options")
+    grp_theme.add_argument("--theme", help="Set active theme by name")
+    grp_theme.add_argument("--theme-mode", choices=["dark", "light"], help="Set theme mode")
+    grp_theme.add_argument(
+        "--theme-contrast",
+        choices=["standard", "medium", "high"],
+        help="Set theme contrast level",
+    )
+
     # Group: Capture Overrides
     grp_cfg = parser.add_argument_group("Hardware Overrides")
     grp_cfg.add_argument("--camera-index", type=int, metavar="N", help="Override config camera index")
@@ -195,6 +205,13 @@ def main(argv=None):
     cfg = load_config(config_path)
     # Re-calculate paths based on config (e.g. custom data_dir)
     paths = apply_config_to_paths(bootstrap_paths, cfg)
+
+    # Theme initialization
+    from gui.theme.theme_controller import ThemeController
+
+    theme_dir = Path("gui/theme/themes")
+    theme_controller = ThemeController(cfg, theme_dir)
+    theme_controller.initialize()
 
     # -------------------------------------------------
     # Phase 3: Uninstallation (Requires paths loaded)
@@ -264,6 +281,35 @@ def main(argv=None):
         win = StartupWindow(allow_retake=final_allow_retake)
         win.show()
         return app.exec()
+
+    # -------------------------------------------------
+    # Theme CLI Overrides
+    # -------------------------------------------------
+    theme_action = False
+
+    if args.theme:
+        theme_controller.set_theme(args.theme)
+        theme_action = True
+
+    if args.theme_mode:
+        theme_controller.set_mode(args.theme_mode)
+        theme_action = True
+
+    if args.theme_contrast:
+        theme_controller.set_contrast(args.theme_contrast)
+        theme_action = True
+
+    if theme_action:
+        theme_controller.save(config_path)
+
+        print("✔ Theme updated")
+        print(f"  Theme     : {theme_controller.theme_name}")
+        print(f"  Mode      : {theme_controller.mode}")
+        print(f"  Contrast  : {theme_controller.contrast}")
+
+        return 0   # THIS IS THE IMPORTANT PART
+
+    
 
     # 2. Debug Tools
     if args.show_paths:
