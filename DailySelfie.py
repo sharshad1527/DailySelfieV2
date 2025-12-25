@@ -161,6 +161,17 @@ def main(argv=None):
     grp_run.add_argument("--list-cameras", action="store_true", help="Scan and list available video devices")
     grp_run.add_argument("--tail-logs", type=int, nargs="?", const=20, metavar="N", help="Show last N log entries (default: 20)")
 
+    # Group: Theme
+    grp_theme = parser.add_argument_group("Theme Options")
+    grp_theme.add_argument("--show-themes", action="store_true", help="List available themes")
+    grp_theme.add_argument("--theme", help="Set active theme by name")
+    grp_theme.add_argument("--theme-mode", choices=["dark", "light"], help="Set theme mode")
+    grp_theme.add_argument(
+        "--theme-contrast",
+        choices=["standard", "medium", "high"],
+        help="Set theme contrast level",
+    )
+
     # Group: Capture Overrides
     grp_cfg = parser.add_argument_group("Hardware Overrides")
     grp_cfg.add_argument("--camera-index", type=int, metavar="N", help="Override config camera index")
@@ -195,6 +206,8 @@ def main(argv=None):
     cfg = load_config(config_path)
     # Re-calculate paths based on config (e.g. custom data_dir)
     paths = apply_config_to_paths(bootstrap_paths, cfg)
+
+
 
     # -------------------------------------------------
     # Phase 3: Uninstallation (Requires paths loaded)
@@ -236,6 +249,64 @@ def main(argv=None):
     # Phase 6: Command Execution
     # -------------------------------------------------
     
+    cfg = load_config(config_path)
+    paths = apply_config_to_paths(bootstrap_paths, cfg)
+
+    from gui.theme.theme_controller import ThemeController
+    from gui.theme.theme_loader import list_theme_files
+
+    theme_dir = Path("gui/theme/themes")
+
+    # 1. Show Themes (Exit Early)
+    if args.show_themes:
+        print("Available Themes:")
+        for p in list_theme_files(theme_dir):
+            print(f"  - {p.stem}")
+        return 0
+
+    # 2. Validate Theme Input (Crash Prevention)
+    if args.theme:
+        available = [p.stem for p in list_theme_files(theme_dir)]
+        if args.theme not in available:
+            print(f"Error: Theme '{args.theme}' not found. Available themes: {available}")
+            return 1
+
+    # 3. Initialize Controller
+    theme_controller = ThemeController(cfg, theme_dir)
+    theme_controller.initialize()
+
+    # 4. Apply CLI Theme Overrides
+    theme_action = False
+
+    if args.theme:
+        theme_controller.set_theme(args.theme)
+        theme_action = True
+
+    if args.theme_mode:
+        theme_controller.set_mode(args.theme_mode)
+        theme_action = True
+
+    if args.theme_contrast:
+        theme_controller.set_contrast(args.theme_contrast)
+        theme_action = True
+
+    if theme_action:
+        theme_controller.save(config_path)
+        print("✔ Theme updated")
+        print(f"  Theme     : {theme_controller.theme_name}")
+        print(f"  Mode      : {theme_controller.mode}")
+        print(f"  Contrast  : {theme_controller.contrast}")
+        # If the user ONLY updated the theme and didn't ask to startup, we exit here?
+        # The original logic exited if theme_action was True.
+        # But wait, what if they do --theme foo --start-up?
+        # The user wants "Theme CLI Overrides logic *before* the if args.start_up: block."
+        # If we change theme, we should probably continue if start-up is requested.
+        # But the original code had `return 0` inside `if theme_action:`.
+        # I will preserve the original behavior of exiting if it's just a config change,
+        # UNLESS start-up is also requested.
+        if not args.start_up:
+             return 0
+
     
     # -------------------------------------------------
     # START UP GUI LAUNCHER 
@@ -243,27 +314,31 @@ def main(argv=None):
     if args.start_up:
         logger = get_logger("startup")
 
-        # Determine global retake policy (CLI arg overrides Config)
         beh = cfg.get("behavior", {})
         config_allow = beh.get("allow_retake", False)
         final_allow_retake = args.allow_retake or config_allow
 
-        # Check existence
         has_photo, existing_path = check_if_already_captured(paths)
-        
         if has_photo and not final_allow_retake:
-            logger.warning(f"Daily Selfie already taken for today: {existing_path}")
-            logger.info("Skipping startup. Use --allow-retake to force open.")
+            logger.warning(
+                "Photo already captured for today. Use --allow-retake to overwrite.",
+                extra={"meta": {"existing_path": str(existing_path)}}
+            )
             return 0
-        # Launch GUI
+
+        # ---- THEME INIT MUST COME FIRST ----
+        from gui.theme.theme_vars import init_theme_vars
+        init_theme_vars(theme_controller)
+
+        # ---- THEN GUI IMPORTS ----
         from PySide6.QtWidgets import QApplication
         from gui.startup.startup_window import StartupWindow
 
         app = QApplication(sys.argv)
-        # Pass the calculated flag into the Window
         win = StartupWindow(allow_retake=final_allow_retake)
         win.show()
         return app.exec()
+
 
     # 2. Debug Tools
     if args.show_paths:

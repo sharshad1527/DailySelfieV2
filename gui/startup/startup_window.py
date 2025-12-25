@@ -1,3 +1,4 @@
+# gui/startup/startup_window.py
 import logging
 import sys
 from pathlib import Path
@@ -25,6 +26,10 @@ from gui.startup.widgets.gif_button import GifButton
 from gui.startup.camera.preview import CameraPreviewThread
 from gui.qt_logging import QtSignalingHandler, install_qt_logger
 from gui.widgets.error_popup import ErrorToast
+
+# Theme 
+from gui.theme.theme_vars import theme_vars
+
 
 
 class StartupWindow(BaseFramelessWindow):
@@ -119,7 +124,15 @@ class StartupWindow(BaseFramelessWindow):
         left_layout.setContentsMargins(2,0,0,0)
         
         self.ghost_slider = GhostOpacitySlider()
-        left_layout.addWidget(QLabel("Ghost", styleSheet="color:#B0B0B0; margin-left:34px;"))
+        vars = theme_vars()
+
+        label = QLabel("Ghost")
+        label.setStyleSheet(f"""
+            color: {vars["on_surface_variant"]};
+            margin-left: 34px;
+        """)
+        left_layout.addWidget(label)
+
         left_layout.addWidget(self.ghost_slider, 1, Qt.AlignLeft)
         return left
 
@@ -135,7 +148,13 @@ class StartupWindow(BaseFramelessWindow):
         # Layers: Preview -> Ghost -> Countdown
         self.preview_lbl = QLabel()
         self.preview_lbl.setAlignment(Qt.AlignCenter)
-        self.preview_lbl.setStyleSheet("background-color: #333333; border-radius: 16px;")
+        vars = theme_vars()
+
+        self.preview_lbl.setStyleSheet(f"""
+            background-color: {vars["surface_container"]};
+            border-radius: 16px;
+        """)
+
         
         self.ghost_lbl = QLabel()
         self.ghost_lbl.setAlignment(Qt.AlignCenter)
@@ -146,7 +165,12 @@ class StartupWindow(BaseFramelessWindow):
         
         self.countdown_lbl = QLabel("")
         self.countdown_lbl.setAlignment(Qt.AlignCenter)
-        self.countdown_lbl.setStyleSheet("background: transparent; color: white; font-weight: bold;")
+        self.countdown_lbl.setStyleSheet(f"""
+            background: transparent;
+            color: {vars["on_surface"]};
+            font-weight: bold;
+        """)
+
         self.countdown_lbl.setFont(QFont("Arial", 96))
         self.countdown_lbl.hide()
 
@@ -175,20 +199,22 @@ class StartupWindow(BaseFramelessWindow):
             ("sosad.gif", "Awful")
         ]
 
-        emoji_style = """
-            QPushButton {
+        vars = theme_vars()
+
+        emoji_style = f"""
+            QPushButton {{
                 background-color: transparent;
-                border: 2px solid #1F1F1F;
+                border: 2px solid {vars["outline_variant"]};
                 border-radius: 20px;
-                font-size: 18px;
-            }
-            QPushButton:hover {
-                border: 2px solid #333333;
-            }
-            QPushButton:checked {
-                border: 2px solid #8B5CF6;
-            }
-        """            
+            }}
+            QPushButton:hover {{
+                border: 2px solid {vars["outline"]};
+            }}
+            QPushButton:checked {{
+                border: 2px solid {vars["primary"]};
+            }}
+        """
+                
         for filename, desc in mood_data:
             gif_path = str(ASSETS_DIR / filename)
             b = GifButton(gif_path)
@@ -205,23 +231,26 @@ class StartupWindow(BaseFramelessWindow):
         self.note_edit = QTextEdit()
         self.note_edit.setPlaceholderText("Anything about today...")
         self.note_edit.setFixedHeight(100)
-        self.note_edit.setStyleSheet("""
-            QTextEdit {
-                background-color: #1A1A1A;
+        vars = theme_vars()
+
+        self.note_edit.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {vars["surface_container_low"]};
                 border: 2px solid transparent;
                 border-radius: 8px;
                 padding: 8px;
-                color: #E0E0E0;
-            }
-            QTextEdit:hover {
-                border: 2px solid #333333;
-                background-color: #1F1F1F;
-            }
-            QTextEdit:focus {
-                border: 2px solid #8B5CF6;
-                background-color: #1F1F1F;
-            }
+                color: {vars["on_surface"]};
+            }}
+            QTextEdit:hover {{
+                border: 2px solid {vars["outline"]};
+                background-color: {vars["surface_container"]};
+            }}
+            QTextEdit:focus {{
+                border: 2px solid {vars["primary"]};
+                background-color: {vars["surface_container"]};
+            }}
         """)
+
         
         self.toast_msg = QLabel("")
         self.toast_msg.setAlignment(Qt.AlignCenter)
@@ -332,15 +361,18 @@ class StartupWindow(BaseFramelessWindow):
     def _update_toast(self, text):
         if text:
             self.toast_msg.setText(text)
-            self.toast_msg.setStyleSheet("""
-                background-color: #222222; 
-                color: #AAAAAA;
-                border: 2px solid #8B5CF6; 
-                border-radius: 12px; 
+            vars = theme_vars()
+
+            self.toast_msg.setStyleSheet(f"""
+                background-color: {vars["surface_container_high"]};
+                color: {vars["on_surface_variant"]};
+                border: 2px solid {vars["primary"]};
+                border-radius: 12px;
                 padding: 0 12px;
                 font-size: 12px;
                 font-weight: 600;
             """)
+
         else:
             self.toast_msg.setText("")
             self.toast_msg.setStyleSheet("background: transparent; color: transparent;")
