@@ -186,7 +186,7 @@ def main(argv=None):
     # -------------------------------------------------
     if args.install:
         from core.installer import run_install
-        req = Path("requirements.txt")
+        req = Path(__file__).parent / "requirements.txt"
         run_install(
             bootstrap_paths.config_dir, 
             requirements_path=req if req.exists() else None
@@ -255,7 +255,7 @@ def main(argv=None):
     from gui.theme.theme_controller import ThemeController
     from gui.theme.theme_loader import list_theme_files
 
-    theme_dir = Path("gui/theme/themes")
+    theme_dir = Path(__file__).parent / "gui/theme/themes"
 
     # 1. Show Themes (Exit Early)
     if args.show_themes:
