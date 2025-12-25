@@ -77,7 +77,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "timer_duration": 0
     },
     "theme": {
-    "name": "material_default",
+    "name": "material-theme",
 
     # Dark Or Light
     "mode": "dark", 
