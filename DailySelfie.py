@@ -163,6 +163,7 @@ def main(argv=None):
 
     # Group: Theme
     grp_theme = parser.add_argument_group("Theme Options")
+    grp_theme.add_argument("--show-themes", action="store_true", help="List available themes")
     grp_theme.add_argument("--theme", help="Set active theme by name")
     grp_theme.add_argument("--theme-mode", choices=["dark", "light"], help="Set theme mode")
     grp_theme.add_argument(
@@ -248,53 +249,33 @@ def main(argv=None):
     # Phase 6: Command Execution
     # -------------------------------------------------
     
-        # Theme initialization
-    # from gui.theme.theme_controller import ThemeController
-
-    # theme_dir = Path("gui/theme/themes")
-    # theme_controller = ThemeController(cfg, theme_dir)
-    # theme_controller.initialize()
-
     cfg = load_config(config_path)
     paths = apply_config_to_paths(bootstrap_paths, cfg)
 
     from gui.theme.theme_controller import ThemeController
+    from gui.theme.theme_loader import list_theme_files
 
     theme_dir = Path("gui/theme/themes")
+
+    # 1. Show Themes (Exit Early)
+    if args.show_themes:
+        print("Available Themes:")
+        for p in list_theme_files(theme_dir):
+            print(f"  - {p.stem}")
+        return 0
+
+    # 2. Validate Theme Input (Crash Prevention)
+    if args.theme:
+        available = [p.stem for p in list_theme_files(theme_dir)]
+        if args.theme not in available:
+            print(f"Error: Theme '{args.theme}' not found. Available themes: {available}")
+            return 1
+
+    # 3. Initialize Controller
     theme_controller = ThemeController(cfg, theme_dir)
     theme_controller.initialize()
-    
-    # -------------------------------------------------
-    # START UP GUI LAUNCHER 
-    # -------------------------------------------------
-    if args.start_up:
-        logger = get_logger("startup")
 
-        beh = cfg.get("behavior", {})
-        config_allow = beh.get("allow_retake", False)
-        final_allow_retake = args.allow_retake or config_allow
-
-        has_photo, existing_path = check_if_already_captured(paths)
-        if has_photo and not final_allow_retake:
-            logger.warning(...)
-            return 0
-
-        # ---- THEME INIT MUST COME FIRST ----
-        from gui.theme.theme_vars import init_theme_vars
-        init_theme_vars(theme_controller)
-
-        # ---- THEN GUI IMPORTS ----
-        from PySide6.QtWidgets import QApplication
-        from gui.startup.startup_window import StartupWindow
-
-        app = QApplication(sys.argv)
-        win = StartupWindow(allow_retake=final_allow_retake)
-        win.show()
-        return app.exec()
-
-    # -------------------------------------------------
-    # Theme CLI Overrides
-    # -------------------------------------------------
+    # 4. Apply CLI Theme Overrides
     theme_action = False
 
     if args.theme:
@@ -311,15 +292,53 @@ def main(argv=None):
 
     if theme_action:
         theme_controller.save(config_path)
-
         print("✔ Theme updated")
         print(f"  Theme     : {theme_controller.theme_name}")
         print(f"  Mode      : {theme_controller.mode}")
         print(f"  Contrast  : {theme_controller.contrast}")
-
-        return 0   # THIS IS THE IMPORTANT PART
+        # If the user ONLY updated the theme and didn't ask to startup, we exit here?
+        # The original logic exited if theme_action was True.
+        # But wait, what if they do --theme foo --start-up?
+        # The user wants "Theme CLI Overrides logic *before* the if args.start_up: block."
+        # If we change theme, we should probably continue if start-up is requested.
+        # But the original code had `return 0` inside `if theme_action:`.
+        # I will preserve the original behavior of exiting if it's just a config change,
+        # UNLESS start-up is also requested.
+        if not args.start_up:
+             return 0
 
     
+    # -------------------------------------------------
+    # START UP GUI LAUNCHER 
+    # -------------------------------------------------
+    if args.start_up:
+        logger = get_logger("startup")
+
+        beh = cfg.get("behavior", {})
+        config_allow = beh.get("allow_retake", False)
+        final_allow_retake = args.allow_retake or config_allow
+
+        has_photo, existing_path = check_if_already_captured(paths)
+        if has_photo and not final_allow_retake:
+            logger.warning(
+                "Photo already captured for today. Use --allow-retake to overwrite.",
+                extra={"meta": {"existing_path": str(existing_path)}}
+            )
+            return 0
+
+        # ---- THEME INIT MUST COME FIRST ----
+        from gui.theme.theme_vars import init_theme_vars
+        init_theme_vars(theme_controller)
+
+        # ---- THEN GUI IMPORTS ----
+        from PySide6.QtWidgets import QApplication
+        from gui.startup.startup_window import StartupWindow
+
+        app = QApplication(sys.argv)
+        win = StartupWindow(allow_retake=final_allow_retake)
+        win.show()
+        return app.exec()
+
 
     # 2. Debug Tools
     if args.show_paths:

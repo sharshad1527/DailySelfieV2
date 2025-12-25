@@ -25,6 +25,7 @@ from gui.theme.schema import is_theme_usable, detect_modes_and_contrasts
 from gui.theme.theme_model import Theme
 
 from core.config import write_config
+from core.logging import get_logger
 
 
 # Inherit from QObject to support Signals
@@ -61,7 +62,12 @@ class ThemeController(QObject):
 
         try:
             self._load_theme(self._theme_name)
-        except ThemeLoaderError:
+        except ThemeLoaderError as e:
+            logger = get_logger("theme_controller")
+            logger.warning(
+                f"Theme '{self._theme_name}' failed to load: {e}. "
+                "Falling back to default."
+            )
             self._load_first_available()
 
     def _load_first_available(self) -> None:
@@ -70,7 +76,13 @@ class ThemeController(QObject):
             self._theme = None
             return
 
-        name = files[0].stem
+        # Prefer 'material-theme' if available
+        available_names = [f.stem for f in files]
+        if "material-theme" in available_names:
+            name = "material-theme"
+        else:
+            name = files[0].stem
+
         self._load_theme(name)
         self._persist()
 
