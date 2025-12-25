@@ -236,7 +236,7 @@ class StartupWindow(BaseFramelessWindow):
         self.note_edit.setStyleSheet(f"""
             QTextEdit {{
                 background-color: {vars["surface_container_low"]};
-                border: 2px solid transparent;
+                border: 2px solid {vars["outline_variant"]};
                 border-radius: 8px;
                 padding: 8px;
                 color: {vars["on_surface"]};
