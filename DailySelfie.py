@@ -206,12 +206,7 @@ def main(argv=None):
     # Re-calculate paths based on config (e.g. custom data_dir)
     paths = apply_config_to_paths(bootstrap_paths, cfg)
 
-    # Theme initialization
-    from gui.theme.theme_controller import ThemeController
 
-    theme_dir = Path("gui/theme/themes")
-    theme_controller = ThemeController(cfg, theme_dir)
-    theme_controller.initialize()
 
     # -------------------------------------------------
     # Phase 3: Uninstallation (Requires paths loaded)
@@ -253,6 +248,21 @@ def main(argv=None):
     # Phase 6: Command Execution
     # -------------------------------------------------
     
+        # Theme initialization
+    # from gui.theme.theme_controller import ThemeController
+
+    # theme_dir = Path("gui/theme/themes")
+    # theme_controller = ThemeController(cfg, theme_dir)
+    # theme_controller.initialize()
+
+    cfg = load_config(config_path)
+    paths = apply_config_to_paths(bootstrap_paths, cfg)
+
+    from gui.theme.theme_controller import ThemeController
+
+    theme_dir = Path("gui/theme/themes")
+    theme_controller = ThemeController(cfg, theme_dir)
+    theme_controller.initialize()
     
     # -------------------------------------------------
     # START UP GUI LAUNCHER 
@@ -260,24 +270,24 @@ def main(argv=None):
     if args.start_up:
         logger = get_logger("startup")
 
-        # Determine global retake policy (CLI arg overrides Config)
         beh = cfg.get("behavior", {})
         config_allow = beh.get("allow_retake", False)
         final_allow_retake = args.allow_retake or config_allow
 
-        # Check existence
         has_photo, existing_path = check_if_already_captured(paths)
-        
         if has_photo and not final_allow_retake:
-            logger.warning(f"Daily Selfie already taken for today: {existing_path}")
-            logger.info("Skipping startup. Use --allow-retake to force open.")
+            logger.warning(...)
             return 0
-        # Launch GUI
+
+        # ---- THEME INIT MUST COME FIRST ----
+        from gui.theme.theme_vars import init_theme_vars
+        init_theme_vars(theme_controller)
+
+        # ---- THEN GUI IMPORTS ----
         from PySide6.QtWidgets import QApplication
         from gui.startup.startup_window import StartupWindow
 
         app = QApplication(sys.argv)
-        # Pass the calculated flag into the Window
         win = StartupWindow(allow_retake=final_allow_retake)
         win.show()
         return app.exec()
