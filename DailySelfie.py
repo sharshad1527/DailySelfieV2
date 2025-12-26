@@ -356,8 +356,20 @@ def main(argv=None):
 
     # No arguments provided? Default to GUI (future) or Help
     if len(argv) == 0:
-        # In the future: launch main dashboard
-        parser.print_help()
+        logger = get_logger("dashboard")
+        # ---- THEME INIT MUST COME FIRST ----
+        from gui.theme.theme_vars import init_theme_vars
+        init_theme_vars(theme_controller)
+
+        # ---- THEN GUI IMPORTS ----
+        from PySide6.QtWidgets import QApplication
+        from gui.dashboard.dashboard import DashboardWindow
+
+        app = QApplication(sys.argv)
+        win = DashboardWindow()
+        win.show()
+        return app.exec()
+
     else:
         parser.print_help()
         

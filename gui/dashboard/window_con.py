@@ -5,6 +5,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QCursor, QColor
 
+from gui.theme.theme_vars import theme_vars 
+
 class ResizeGrip(QWidget):
     """
     Invisible overlay widget to handle window resizing on edges/corners.
@@ -97,16 +99,18 @@ class DashboardShell(QMainWindow):
         self.resize(width, height)
         self.setMinimumSize(800, 500)
 
+        vars = theme_vars()
+
         # 1. Main Container (Rounded, Dark)
         self._container = QWidget(self)
         self.setCentralWidget(self._container)
         self._container.setObjectName("container")
-        self._container.setStyleSheet("""
-            QWidget#container {
-                background-color: #121212;
-                border: 1px solid #333333;
+        self._container.setStyleSheet(f"""
+            QWidget#container {{
+                background-color: {vars["background"]};
+                border: 2px solid {vars["outline_variant"]};
                 border-radius: 12px;
-            }
+            }}
         """)
 
         # Main Top Bar
@@ -157,36 +161,39 @@ class DashboardShell(QMainWindow):
                 self._drag_pos = event.globalPosition().toPoint()
 
     def _add_window_controls(self):
-        btn_style = """
-            QPushButton {
+        var = theme_vars() 
+        btn_style = f"""
+            QPushButton {{
                 background-color: transparent;
-                border: 2px solid #333333; 
+                border: 2px solid {var["outline_variant"]}; 
                 border-radius: 10px;
                 font-weight: bold;
                 font-size: 14px;
-            }
-            QPushButton:hover {
-                border: 2px solid #8B5CF6;
-            }
-            QPushButton:pressed {
-                background-color: #444444;
-            }
+            }}
+            QPushButton:hover {{
+                border: 2px solid {var["outline"]};
+            }}
+            QPushButton:pressed {{
+                background-color: {var["outline_variant"]};
+            }}
         """
 
-        btn_close_style = """
-            QPushButton {
+        btn_close_style = f"""
+            QPushButton {{
                 background-color: transparent;
-                border: 2px solid #333333;
+                border: 2px solid {var["outline_variant"]};
                 border-radius:10px;
                 font-weight: bold;
                 font-size: 14px;
-            }
-            QPushButton:hover {
-                border: 2px solid #E74C3C;
-            }
-            QPushButton:pressed {
-                background-color: #A93226;
-            }
+            }}
+            QPushButton:hover {{
+                border: 2px solid {var["error"]};
+                color: {var["error"]};
+            }}
+            QPushButton:pressed {{
+                background-color: {var["error_container"]};
+                color: {var["inverse_on_surface"]};
+            }}
         """
 
         btn_min = QPushButton("─")
@@ -204,13 +211,14 @@ class DashboardShell(QMainWindow):
         btn_close.setStyleSheet(btn_close_style) 
         btn_close.clicked.connect(self.close)
 
+
         title = QLabel("Daily Selfie")
-        title.setStyleSheet("""
-            QLabel {
-                color: #E0E0E0;
+        title.setStyleSheet(f"""
+            QLabel {{
+                color: {var["on_surface"]};
                 font-size: 14px;
                 font-weight: 600;
-            }
+            }}
         """)
 
         self._top_bar_layout.insertWidget(0, title)

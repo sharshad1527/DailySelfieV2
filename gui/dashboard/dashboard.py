@@ -10,38 +10,6 @@ try:
 except:
     from window_con import DashboardShell
 
-btn_style = """
-            QPushButton {
-                background-color: transparent;
-                border: 2px solid #333333; 
-                border-radius: 10px;
-                font-weight: bold;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                border: 2px solid #8B5CF6;
-            }
-            QPushButton:pressed {
-                background-color: #444444;
-            }
-        """
-
-btn_close_style = """
-            QPushButton {
-                background-color: transparent;
-                border: 2px solid #333333;
-                border-radius:10px;
-                font-weight: bold;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                border: 2px solid #E74C3C;
-            }
-            QPushButton:pressed {
-                background-color: #A93226;
-            }
-        """
-
 
 class DashboardWindow(DashboardShell):
     def __init__(self):
