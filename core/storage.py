@@ -63,13 +63,24 @@ def atomic_write(dest_folder: Path, filename: str, data: bytes) -> Path:
     final_path = dest_folder / filename
 
     # Use NamedTemporaryFile with delete=False to control the final rename.
-    with tempfile.NamedTemporaryFile(dir=str(dest_folder), delete=False) as tmp:
-        tmp.write(data)
-        tmp_path = Path(tmp.name)
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=str(dest_folder), delete=False) as tmp:
+            # Capture path immediately so cleanup works even if write fails
+            tmp_path = Path(tmp.name)
+            tmp.write(data)
 
-    # Atomically replace.
-    tmp_path.replace(final_path)
-    return final_path
+        # Atomically replace.
+        tmp_path.replace(final_path)
+        return final_path
+    except Exception:
+        # If anything goes wrong, cleanup the temp file if it exists
+        if tmp_path and tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+        raise
 
 
 # -------------------------------------------------------------
