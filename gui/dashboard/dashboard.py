@@ -17,6 +17,8 @@ class DashboardWindow(DashboardShell):
 
         self._toggle_maximize()
 
+        
+
     
 
 # --- Smoke Test ---
