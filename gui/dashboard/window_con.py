@@ -86,7 +86,7 @@ class ResizeGrip(QWidget):
         elif self.edge == Qt.BottomRightCorner:
             w += dx; h += dy
 
-        if w > 800 and h > 500:
+        if w > 1100 and h > 620:
             win.setGeometry(x, y, w, h)
 
 
@@ -97,7 +97,7 @@ class DashboardShell(QMainWindow):
         self.setAttribute(Qt.WA_TranslucentBackground)
 
         self.resize(width, height)
-        self.setMinimumSize(800, 500)
+        self.setMinimumSize(1100, 620)
 
         vars = theme_vars()
 
