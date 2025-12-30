@@ -21,13 +21,14 @@ class DashboardWindow(DashboardShell):
         self._toggle_maximize()
 
         layout = QHBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(10, 0, 0, 0)
         layout.setSpacing(0)
 
         self._content.setLayout(layout)
 
         self._navigation_rail = NavigationRail()
         layout.addWidget(self._navigation_rail)
+        layout.addStretch()
 
 
 # --- Smoke Test ---

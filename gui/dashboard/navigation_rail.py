@@ -15,6 +15,8 @@ from core.paths import get_app_paths
 paths = get_app_paths("DailySelfie", ensure=False)
 ICONS_DIR = paths.project_root / "gui" / "assets" / "icons"
 
+vars = theme_vars()
+
 # Icons
 ico_menu = "menu.svg"
 ico_menu_open = "menu_open.svg"
@@ -33,11 +35,13 @@ class NavButton(QWidget):
     
     def __init__(self, icon_normal, icon_checked, text: str = ""):
         super().__init__()
-        _hovered = False
-        _checked = False
-        _collapsed = False
+        self._hovered = False
+        self._checked = False
+        self._collapsed = False
 
         self.setAttribute(Qt.WA_Hover, True)
+        self.setAttribute(Qt.WA_StyledBackground, True) # Ensure background is painted
+        self.setObjectName("NavButton") # Set class name for stylesheet selector
         self.setMouseTracking(True)
         self.setCursor(Qt.PointingHandCursor)
 
@@ -45,6 +49,8 @@ class NavButton(QWidget):
         self.icon_checked = icon_checked
 
         nav_button_layout = QHBoxLayout()
+        nav_button_layout.setContentsMargins(12, 12, 0, 10)
+        nav_button_layout.setSpacing(0)
 
         self.icon_label = QLabel()
         self.icon_label.setPixmap(self.icon_normal.pixmap(24, 24))
@@ -53,12 +59,15 @@ class NavButton(QWidget):
 
         nav_button_layout.addWidget(self.icon_label)
         nav_button_layout.addWidget(self.txt_label)
+        nav_button_layout.addStretch()
         self.setLayout(nav_button_layout)
+        self.updateStyle()
 
     # Emit the clicked signal when the navbutton is clicked
     def mousePressEvent(self, event):
-        print("NavButton clicked")
-        self.clicked.emit()
+        if event.button() == Qt.LeftButton:
+            print("NavButton clicked")
+            self.clicked.emit()
 
     # Emit the hovered signal when the navbutton is hovered
     def enterEvent(self, event):
@@ -75,7 +84,7 @@ class NavButton(QWidget):
     # Set the checked state of the navbutton
     def setChecked(self, value: bool):
         self._checked = value
-        # self.updateStyle()
+        self.updateStyle()
 
     # Get the checked state of the navbutton
     def isChecked(self) -> bool:
@@ -86,8 +95,12 @@ class NavButton(QWidget):
         self._collapsed = value
         if value == True:
             self.txt_label.hide()
+            self.icon_label.setPixmap(self.icon_normal.pixmap(24, 24))
+
         else:
             self.txt_label.show()
+            self.icon_label.setPixmap(self.icon_checked.pixmap(24, 24))
+
 
     # Get the collapsed state of the navbutton
     def isCollapsed(self) -> bool:
@@ -95,16 +108,57 @@ class NavButton(QWidget):
 
     # Update the style of the navbutton
     def updateStyle(self):
-        if self._hovered:
-            pass
+        if self._checked:
+            # CHECKED STATE
+            # Material 3 Rule: Active/Selected items use the Secondary Container color.
+            # Color Role: Secondary Container (Background)
+            # Content Color: On Secondary Container (Text/Icon)
+            self.setStyleSheet(f"""
+                QWidget#NavButton {{ 
+                    background-color: {vars['secondary_container']}; 
+                    border-radius: 20px; 
+                }}
+                QLabel {{ 
+                    color: {vars['on_secondary_container']}; 
+                    background-color: transparent; 
+                }}
+            """)
+        elif self._hovered:
+            # HOVER STATE
+            # Material 3 Rule: Hover state uses a state layer (usually 8% opacity on surface).
+            # Proxy Color: Surface Container Highest (approximates the hover depth).
+            # Content Color: On Surface
+            self.setStyleSheet(f"""
+                QWidget#NavButton {{ 
+                    background-color: {vars['surface_container_highest']}; 
+                    border-radius: 20px; 
+                }}
+                QLabel {{ 
+                    color: {vars['on_surface']}; 
+                    background-color: transparent; 
+                }}
+            """)
         else:
-            pass
+            # DEFAULT STATE
+            # Material 3 Rule: Inactive items sit on the surface (transparent container).
+            # Color Role: Transparent
+            # Content Color: On Surface Variant (Low emphasis for inactive items)
+            self.setStyleSheet(f"""
+                QWidget#NavButton {{ 
+                    background-color: transparent; 
+                    border-radius: 20px; 
+                }}
+                QLabel {{ 
+                    color: {vars['on_surface_variant']}; 
+                    background-color: transparent; 
+                }}
+            """)
 
 
 class NavigationRail(QWidget):
-
-    EXPANDED_WIDTH = 200
-    COLLAPSED_WIDTH = 60
+    # Just Changed Value to low because of testing
+    EXPANDED_WIDTH = 200 # 200px
+    COLLAPSED_WIDTH = 60 # 60px
 
     def __init__(self):
         super().__init__()
@@ -125,15 +179,17 @@ class NavigationRail(QWidget):
         # Shutter icon sits on 'primary' background, so use 'on_primary' (usually white/black)
         color_on_primary = v.qcolor("on_primary")
         
-        ico_menu = self._create_colored_icon("menu.svg", color_active)
+        ico_menu = self._create_colored_icon("menu.svg", color_inactive)
+        ico_menu_open = self._create_colored_icon("menu_open.svg", color_active)
 
         
-        sample = NavButton(ico_menu, ico_menu, "Menu")
-        sample.clicked.connect(lambda: print("You Made It"))
-        sample.setChecked(True)
-        sample.setCollapsed(True)
-        vlayout.addWidget(sample)
-        
+        self.sample = NavButton(ico_menu, ico_menu_open, "Menu")
+        self.sample.clicked.connect(self.toggleCollapsedState)
+        # self.sample.setChecked(True)
+        # sample.setCollapsed(True)
+        vlayout.addWidget(self.sample)
+
+        vlayout.addStretch()
 
 
         self.applyCollapsedState(self._is_collapsed)
@@ -143,15 +199,20 @@ class NavigationRail(QWidget):
         
     def toggleCollapsedState(self):
         self._is_collapsed = not self._is_collapsed
+        
         self.applyCollapsedState(self._is_collapsed)
 
 
     def applyCollapsedState(self, collapsed):
         if collapsed:
             self.setFixedWidth(self.COLLAPSED_WIDTH)
+            # Just A test
+            self.sample.setCollapsed(True)
             
         else:
             self.setFixedWidth(self.EXPANDED_WIDTH)
+            # Just A test
+            self.sample.setCollapsed(False)
             
     # --------------------------------------------------
     # Theme helpers
@@ -194,7 +255,6 @@ class NavigationRail(QWidget):
 
         """
         Regenerates all icons using the current theme colors.
-        Call this when theme changes or button states change (like Flash ON/OFF).
         """
         v = theme_vars()
 
