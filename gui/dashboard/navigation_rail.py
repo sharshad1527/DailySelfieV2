@@ -87,7 +87,7 @@ class NavButton(QWidget):
     # Set the checked state of the navbutton
     def setChecked(self, value: bool):
         self._checked = value
-        print("Checked: ", value)
+        # print("Checked: ", value)
         self.updateStyle()
 
     # Get the checked state of the navbutton
@@ -97,7 +97,7 @@ class NavButton(QWidget):
     # Set the collapsed state of the navbutton
     def setCollapsed(self, value: bool):
         self._collapsed = value
-        print("Collapsed: ", value)
+        # print("Collapsed: ", value)
         self.updateStyle()
             
     # Get the collapsed state of the navbutton
@@ -128,11 +128,11 @@ class NavButton(QWidget):
             # Content Color: On Secondary Container (Text/Icon)
             self.setStyleSheet(f"""
                 QWidget#NavButton {{ 
-                    background-color: {vars['secondary_container']}; 
+                    background-color: {vars['primary']}; 
                     border-radius: 20px; 
                 }}
                 QLabel {{ 
-                    color: {vars['on_surface']}; 
+                    color: {vars['on_primary']}; 
                     background-color: transparent; 
                 }}
             """)
@@ -205,8 +205,8 @@ class NavigationRail(QWidget):
         super().__init__()
         
         vars = theme_vars()
-        self._is_collapsed = False
-        self._buttons = []
+        self._is_collapsed = False # Defaultly Collapsed
+        self._buttons = [] # Button List
     
 
         vlayout = QVBoxLayout(self)
@@ -215,26 +215,30 @@ class NavigationRail(QWidget):
 
         self._apply_icon_theme()
 
+        # Menu Button
         btn_menu = NavButton(self.ico_menu, self.ico_menu_open, "", True)
         self._buttons.append(btn_menu)
         btn_menu.clicked.connect(self.toggleCollapsedState)
         vlayout.addWidget(btn_menu)
 
+        # Dashboard Button
         btn_dashboard = NavButton(self.ico_dashboard, self.ico_dashboard_filled, "Dashboard")
         self._buttons.append(btn_dashboard)
-        btn_dashboard.clicked.connect(lambda: print("Dashboard clicked"))
+        btn_dashboard.clicked.connect(lambda: self.toggleCheckedState(btn_dashboard))
         vlayout.addWidget(btn_dashboard)
 
+        # Calendar Button
         btn_calendar = NavButton(self.ico_calendar, self.ico_calendar_filled, "Calendar")
         self._buttons.append(btn_calendar)
-        btn_calendar.clicked.connect(lambda: print("Calendar clicked"))
+        btn_calendar.clicked.connect(lambda: self.toggleCheckedState(btn_calendar))
         vlayout.addWidget(btn_calendar)
 
         vlayout.addStretch()
 
+        # Settings Button
         btn_settings = NavButton(self.ico_settings, self.ico_settings_filled, "Settings")
         self._buttons.append(btn_settings)
-        btn_settings.clicked.connect(lambda: print("Settings clicked"))
+        btn_settings.clicked.connect(lambda: self.toggleCheckedState(btn_settings))
         vlayout.addWidget(btn_settings)
 
         btn_dashboard.setChecked(True) # Defaultly Selected
@@ -242,19 +246,26 @@ class NavigationRail(QWidget):
         self.applyCollapsedState(self._is_collapsed)
 
 
-        
+    # Toggle Collapsed State        
     def toggleCollapsedState(self):
         self._is_collapsed = not self._is_collapsed
         
         self.applyCollapsedState(self._is_collapsed)
-        
+    
+    # Toggle Checked State
+    def toggleCheckedState(self, toggle):
+        for btn in self._buttons:
+            if btn == toggle:
+                btn.setChecked(True)
+            else:
+                btn.setChecked(False)
 
+    # Apply Collapsed State
     def applyCollapsedState(self, collapsed):
         if collapsed:
             self.setFixedWidth(self.COLLAPSED_WIDTH)
             for btn in self._buttons:
                 btn.setCollapsed(True)
-
         else:
             self.setFixedWidth(self.EXPANDED_WIDTH)
             for btn in self._buttons:
@@ -264,6 +275,7 @@ class NavigationRail(QWidget):
     # Theme helpers
     # --------------------------------------------------
 
+    # Create Colored Icon
     def _create_colored_icon(self, icon_name, qcolor):
         """
         Loads an SVG and repaints it with the given QColor.
@@ -297,6 +309,7 @@ class NavigationRail(QWidget):
 
         return QIcon(colored_pixmap)
 
+    # Apply Icon Theme
     def _apply_icon_theme(self):
 
         """
@@ -304,29 +317,35 @@ class NavigationRail(QWidget):
         """
         v = theme_vars()
 
+        # Colors
+        primary = v.qcolor("primary")
+        on_primary = v.qcolor("on_primary")
+        primary_container = v.qcolor("primary_container")
+        on_primary_container = v.qcolor("on_primary_container")
+        
         # Define colors
-        on_secondary_container = v.qcolor("on_secondary_container")
-        on_surface = v.qcolor("on_surface")
-        on_surface_variant = v.qcolor("on_surface_variant")
+        # on_secondary_container = v.qcolor("on_secondary_container")
+        # on_surface = v.qcolor("on_surface")
+        # on_surface_variant = v.qcolor("on_surface_variant")
         
         # WORKING METHOD SET A PIXMAP TO A QLabel AND SET SIZE 24 24
         # print(ico_menu)
         # self.menu_btn.setPixmap(ico_menu.pixmap(24, 24))
-        self.ico_menu = self._create_colored_icon(ico_menu, on_surface_variant)
+        self.ico_menu = self._create_colored_icon(ico_menu, primary)
         
-        self.ico_menu_open = self._create_colored_icon(ico_menu_open, on_secondary_container)
+        self.ico_menu_open = self._create_colored_icon(ico_menu_open, primary)
 
-        self.ico_dashboard = self._create_colored_icon(ico_dashboard, on_surface_variant)
+        self.ico_dashboard = self._create_colored_icon(ico_dashboard, primary)
         
-        self.ico_dashboard_filled = self._create_colored_icon(ico_dashboard_filled, on_secondary_container)
+        self.ico_dashboard_filled = self._create_colored_icon(ico_dashboard_filled, primary_container)
 
-        self.ico_calendar = self._create_colored_icon(ico_calendar, on_surface_variant)
+        self.ico_calendar = self._create_colored_icon(ico_calendar, primary)
 
-        self.ico_calendar_filled = self._create_colored_icon(ico_calendar_filled, on_secondary_container)
+        self.ico_calendar_filled = self._create_colored_icon(ico_calendar_filled, primary_container)
 
-        self.ico_settings = self._create_colored_icon(ico_settings, on_surface_variant)
+        self.ico_settings = self._create_colored_icon(ico_settings, primary)
         
-        self.ico_settings_filled = self._create_colored_icon(ico_settings_filled, on_secondary_container)
+        self.ico_settings_filled = self._create_colored_icon(ico_settings_filled, primary_container)
 
         self.update()
 
