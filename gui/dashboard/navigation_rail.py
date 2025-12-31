@@ -51,7 +51,7 @@ class NavButton(QWidget):
 
         nav_button_layout = QHBoxLayout()
         nav_button_layout.setContentsMargins(12, 12, 10, 10)
-        nav_button_layout.setSpacing(0)
+        nav_button_layout.setSpacing(8)
 
         self.icon_label = QLabel()
         self.icon_label.setPixmap(self.icon_normal.pixmap(24, 24))
@@ -211,7 +211,7 @@ class NavigationRail(QWidget):
 
         vlayout = QVBoxLayout(self)
         vlayout.setContentsMargins(0, 0, 10, 10)
-        vlayout.setSpacing(0)
+        vlayout.setSpacing(8)
 
         self._apply_icon_theme()
 
