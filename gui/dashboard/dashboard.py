@@ -11,12 +11,16 @@ try:
 except:
     from window_con import DashboardShell
 
+from gui.dashboard.pages.dashboard import DashboardPage
+from gui.dashboard.pages.calendar import CalendarPage
+from gui.dashboard.pages.settings import SettingsPage
 from gui.dashboard.navigation_rail import NavigationRail
 
 class DashboardWindow(DashboardShell):
     def __init__(self):
         super().__init__()
         vars = theme_vars()
+        self._pages = QStackedWidget()
 
         self._toggle_maximize()
 
@@ -28,7 +32,20 @@ class DashboardWindow(DashboardShell):
 
         self._navigation_rail = NavigationRail()
         layout.addWidget(self._navigation_rail)
+        
+        self._pages.insertWidget(0, DashboardPage())
+        self._pages.insertWidget(1, CalendarPage())
+        self._pages.insertWidget(2, SettingsPage())
+
+        layout.addWidget(self._pages, 1)
+        self._pages.setCurrentIndex(0)
+        self._navigation_rail.pageSelected.connect(self._onPageSelected)
         layout.addStretch()
+
+    def _onPageSelected(self, index: int):
+        self._pages.setCurrentIndex(index)
+        
+
 
 
 # --- Smoke Test ---

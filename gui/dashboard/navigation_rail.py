@@ -39,6 +39,8 @@ class NavButton(QWidget):
         self._checked = False
         self._collapsed = False
         self._isbtnmenu = isbtnmenu
+        self.page_id = None
+
 
         self.setAttribute(Qt.WA_Hover, True)
         self.setAttribute(Qt.WA_StyledBackground, True) # Ensure background is painted
@@ -197,9 +199,10 @@ class NavButton(QWidget):
 
 
 class NavigationRail(QWidget):
-    # Just Changed Value to low because of testing
     EXPANDED_WIDTH = 200 # 200px
     COLLAPSED_WIDTH = 60 # 60px
+
+    pageSelected = Signal(int)
 
     def __init__(self):
         super().__init__()
@@ -207,6 +210,7 @@ class NavigationRail(QWidget):
         vars = theme_vars()
         self._is_collapsed = False # Defaultly Collapsed
         self._buttons = [] # Button List
+        self._menu_button = None # menu button
     
 
         vlayout = QVBoxLayout(self)
@@ -217,18 +221,21 @@ class NavigationRail(QWidget):
 
         # Menu Button
         btn_menu = NavButton(self.ico_menu, self.ico_menu_open, "", True)
-        self._buttons.append(btn_menu)
+        # self._buttons.append(btn_menu) # Old
+        self._menu_button = btn_menu # New
         btn_menu.clicked.connect(self.toggleCollapsedState)
         vlayout.addWidget(btn_menu)
 
         # Dashboard Button
         btn_dashboard = NavButton(self.ico_dashboard, self.ico_dashboard_filled, "Dashboard")
+        btn_dashboard.page_id = 0
         self._buttons.append(btn_dashboard)
         btn_dashboard.clicked.connect(lambda: self.toggleCheckedState(btn_dashboard))
         vlayout.addWidget(btn_dashboard)
 
         # Calendar Button
         btn_calendar = NavButton(self.ico_calendar, self.ico_calendar_filled, "Calendar")
+        btn_calendar.page_id = 1
         self._buttons.append(btn_calendar)
         btn_calendar.clicked.connect(lambda: self.toggleCheckedState(btn_calendar))
         vlayout.addWidget(btn_calendar)
@@ -237,6 +244,7 @@ class NavigationRail(QWidget):
 
         # Settings Button
         btn_settings = NavButton(self.ico_settings, self.ico_settings_filled, "Settings")
+        btn_settings.page_id = 2
         self._buttons.append(btn_settings)
         btn_settings.clicked.connect(lambda: self.toggleCheckedState(btn_settings))
         vlayout.addWidget(btn_settings)
@@ -244,7 +252,7 @@ class NavigationRail(QWidget):
         btn_dashboard.setChecked(True) # Defaultly Selected
 
         self.applyCollapsedState(self._is_collapsed)
-
+        
 
     # Toggle Collapsed State        
     def toggleCollapsedState(self):
@@ -257,6 +265,7 @@ class NavigationRail(QWidget):
         for btn in self._buttons:
             if btn == toggle:
                 btn.setChecked(True)
+                self.pageSelected.emit(btn.page_id)
             else:
                 btn.setChecked(False)
 
