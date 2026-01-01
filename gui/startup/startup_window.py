@@ -121,7 +121,7 @@ class StartupWindow(BaseFramelessWindow):
         left = QWidget()
         left.setFixedWidth(90)
         left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(2,0,0,0)
+        left_layout.setContentsMargins(0,0,0,0) # align cleanly
         
         self.ghost_slider = GhostOpacitySlider()
         vars = theme_vars()
@@ -129,11 +129,15 @@ class StartupWindow(BaseFramelessWindow):
         label = QLabel("Ghost")
         label.setStyleSheet(f"""
             color: {vars["on_surface_variant"]};
-            margin-left: 34px;
         """)
-        left_layout.addWidget(label)
+        # Center the label horizontally
+        left_layout.addWidget(label, 0, Qt.AlignHCenter | Qt.AlignBottom)
+        
+        # Add a small spacer if needed, or just let layout handle it
+        left_layout.addSpacing(4)
 
-        left_layout.addWidget(self.ghost_slider, 1, Qt.AlignLeft)
+        # Center the slider horizontally
+        left_layout.addWidget(self.ghost_slider, 1, Qt.AlignHCenter)
         return left
 
     def _build_center_panel(self):
