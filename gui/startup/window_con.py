@@ -83,7 +83,7 @@ class BaseFramelessWindow(QMainWindow):
 
     def _init_top_bar(self):
         layout = QHBoxLayout(self._top_bar)
-        layout.setContentsMargins(22, 0, 12, 0)
+        layout.setContentsMargins(5, 0, 12, 0)
 
         self._title_lbl = QLabel("Daily Selfie")
         

@@ -2,7 +2,7 @@
 
 from PySide6.QtCore import Qt, QRect, Signal
 from PySide6.QtWidgets import QWidget
-from PySide6.QtGui import QPainter, QFont
+from PySide6.QtGui import QPainter, QFont, QPainterPath
 from gui.theme.theme_vars import theme_vars
 
 
@@ -19,20 +19,18 @@ class GhostOpacitySlider(QWidget):
         self._dragging = False
 
         # Geometry
-        self.track_width = 30
-        self.padding = 24
+        self.track_width = 56
+        self.padding_top = 12  
+        self.padding_bottom = 12
 
-        self.handle_height_idle = 12
-        self.handle_height_active = 22
+        # Handle properties
+        self.handle_height = 8 
+        self.handle_width_extra = 24 
+        self.gap_size = 3 
+        # Total width needed: track + handle overhang
+        self.setFixedWidth(self.track_width + self.handle_width_extra + 4) 
+        self.setMinimumHeight(460)
 
-        self.bubble_size = 28
-        self.bubble_gap = 12
-        self.right_gutter = 24
-
-        self.setFixedWidth(
-            self.track_width + self.bubble_size + self.bubble_gap + self.right_gutter
-        )
-        self.setMinimumHeight(300)
         self.setCursor(Qt.PointingHandCursor)
         self.setMouseTracking(True)
 
@@ -67,19 +65,24 @@ class GhostOpacitySlider(QWidget):
     # --------------------------------------------------
 
     def _track_rect(self):
-        x = self.bubble_size + self.bubble_gap
+        # Centered horizontally
+        x = (self.width() - self.track_width) // 2
+        # Taking up full height minus padding
         return QRect(
             x,
-            self.padding,
+            self.padding_top,
             self.track_width,
-            self.height() - 2 * self.padding,
+            self.height() - (self.padding_top + self.padding_bottom)
         )
 
     def _ratio(self):
+        if self._max == self._min:
+            return 0
         return (self._value - self._min) / (self._max - self._min)
 
     def _value_to_y(self):
         track = self._track_rect()
+        available_height = track.height()
         return track.bottom() - int(track.height() * self._ratio())
 
     # --------------------------------------------------
@@ -89,78 +92,100 @@ class GhostOpacitySlider(QWidget):
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
+        
+        v = theme_vars()
 
         track = self._track_rect()
         y = self._value_to_y()
 
-        v = theme_vars()
+        # 1. Define Shapes
+        # ----------------
+        # Instead of a capsule (width/2), we use a smaller fixed radius.
+        radius = 14
+        # The Fill Level
+        fill_top = y
+        fill_height = track.bottom() - fill_top
+        # 2. Draw Background (Empty Jar)
+        # -----------------------------
+        p.save()
 
         # Track background
-        p.setPen(Qt.NoPen)
-        p.setBrush(v.qcolor("surface_variant"))
-        p.drawRoundedRect(track, 14, 14)
+        p.setPen(Qt.NoPen)       
+        p.setBrush(v.qcolor("surface_container_highest"))
+        p.drawRoundedRect(track, radius, radius)
+        p.restore()
+ 
+        # 3. Draw Text (Background Color)
+        # -------------------------------
 
-        # Track fill
+        # Text is drawn at the BOTTOM of the track
+        text_rect = QRect(track.x(), track.bottom() - 50, track.width(), 40)
+        p.save()
+        font = QFont()
+        font.setBold(True)
+        font.setPixelSize(24) 
+        p.setFont(font)
+        text = str(int(self._value))
+        p.setPen(v.qcolor("on_surface_variant"))
+        p.drawText(text_rect, Qt.AlignCenter, text)
+        p.restore()
+
+        # 4. Draw Fill (The Liquid)
+        # -------------------------
+        p.save()
+        track_path = QPainterPath()
+        track_path.addRoundedRect(track.x(), track.y(), track.width(), track.height(), radius, radius)
+        p.setClipPath(track_path)
+
         fill_rect = QRect(
             track.x(),
-            y,
+            fill_top,
             track.width(),
-            track.bottom() - y,
+            fill_height + radius
         )
         p.setBrush(v.qcolor("primary"))
-        p.drawRoundedRect(fill_rect, 14, 14)
+        p.drawRect(fill_rect)
 
-        # Handle
-        handle_h = (
-            self.handle_height_active if self._dragging else self.handle_height_idle
-        )
+        # 5. Draw Text (Fill Color)
+        # -------------------------
+        # This draws the text *again*, but clipped to the fill rect
 
+        p.setClipRect(fill_rect) 
+        p.setPen(v.qcolor("on_primary"))
+        p.setFont(font)
+        p.drawText(text_rect, Qt.AlignCenter, text)
+        p.restore()
+
+        # 6. Draw Handle (The Limit Line/Cap)
+        # -----------------------------------
+        p.save()
+        current_h = self.handle_height - 2 if self._dragging else self.handle_height
+        handle_w = self.track_width + self.handle_width_extra
+        handle_x = track.center().x() - handle_w // 2
+        handle_y = y - current_h // 2
+        
         handle_rect = QRect(
-            track.x() - 10,
-            y - handle_h // 2,
-            track.width() + 20,
-            handle_h,
+            handle_x,
+            handle_y,
+            handle_w,
+            current_h
         )
 
-        if self._dragging:
-            p.setPen(v.qcolor("primary"))
-            p.drawRoundedRect(
-                handle_rect.adjusted(1, 1, -1, -1),
-                handle_h // 2,
-                handle_h // 2,
-            )
-            p.setPen(Qt.NoPen)
+        # Draw the "Gap" (Stroke effect)
+        # We draw a larger rect behind the handle using the BACKGROUND color
 
-        p.setBrush(
-            v.qcolor("surface_container_high")
-            if self._dragging
-            else v.qcolor("surface_container_highest")
-        )
-        p.drawRoundedRect(
-            handle_rect,
-            handle_h // 2,
-            handle_h // 2,
-        )
+        # This erases the track/fill visually
+        gap_rect = handle_rect.adjusted(-self.gap_size, -self.gap_size, self.gap_size, self.gap_size)
+        p.setPen(Qt.NoPen)
 
-        # Value bubble
-        if self._dragging:
-            bubble_rect = QRect(
-                track.left() - self.bubble_size - self.bubble_gap,
-                handle_rect.center().y() - self.bubble_size // 2,
-                self.bubble_size,
-                self.bubble_size,
-            )
+        # Use 'background' to match the window background
+        p.setBrush(v.qcolor("background")) 
+        p.drawRoundedRect(gap_rect, (current_h + self.gap_size*2) // 2, (current_h + self.gap_size*2) // 2)
 
-            p.setBrush(v.qcolor("surface_container"))
-            p.drawEllipse(bubble_rect)
-
-            p.setPen(v.qcolor("on_surface"))
-            font = QFont()
-            font.setBold(True)
-            font.setPointSize(9)
-            p.setFont(font)
-
-            p.drawText(bubble_rect, Qt.AlignCenter, str(self._value))
+        # Draw the actual Handle
+        p.setBrush(v.qcolor("primary"))
+        p.drawRoundedRect(handle_rect, current_h // 2, current_h // 2)
+        p.restore()
 
     # --------------------------------------------------
     # Interaction
@@ -181,7 +206,12 @@ class GhostOpacitySlider(QWidget):
 
     def _update_from_mouse(self, y):
         track = self._track_rect()
+        height = track.height()
+        if height <= 0: return 
+
         y = max(track.top(), min(track.bottom(), y))
-        ratio = 1.0 - (y - track.top()) / track.height()
+        relative_y = y - track.top()
+        ratio = 1.0 - (relative_y / height)
+        ratio = max(0.0, min(1.0, ratio))
         value = int(self._min + ratio * (self._max - self._min))
         self.setValue(value)

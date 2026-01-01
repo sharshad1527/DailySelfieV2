@@ -122,9 +122,9 @@ class StartupWindow(BaseFramelessWindow):
         self.update_window_theme()
 
         # 2. Labels
-        lbl_style = f"color: {v['on_surface_variant']}; font-weight: bold;"
+        lbl_style = f"color: {v['on_surface_variant']};"
         
-        self.label_ghost.setStyleSheet(f"color: {v['on_surface_variant']}; margin-left: 34px;")
+        self.label_ghost.setStyleSheet(f"color: {v['on_surface_variant']};")
         self.label_mood.setStyleSheet(lbl_style)
         self.label_note.setStyleSheet(lbl_style)
 
@@ -193,15 +193,16 @@ class StartupWindow(BaseFramelessWindow):
         left = QWidget()
         left.setFixedWidth(90)
         left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(2,0,0,0)
+        left_layout.setContentsMargins(0,0,0,0) # Removed Margin
         
-        self.ghost_slider = GhostOpacitySlider()
         self.ghost_slider = GhostOpacitySlider()
 
         self.label_ghost = QLabel("Ghost")
-        left_layout.addWidget(self.label_ghost)
-
-        left_layout.addWidget(self.ghost_slider, 1, Qt.AlignLeft)
+        self.label_ghost.setAlignment(Qt.AlignCenter)
+        
+        # Add both widgets aligned to the same horizontal position
+        left_layout.addWidget(self.label_ghost, 0, Qt.AlignHCenter)
+        left_layout.addWidget(self.ghost_slider, 1, Qt.AlignHCenter)
         return left
 
     def _build_center_panel(self):
