@@ -44,7 +44,7 @@ class ActionRole(Enum):
 class NavButton(QWidget):
     clicked = Signal() # Add a Click Signal
     
-    def __init__(self, icon_normal, icon_checked, text: str = "", role: ActionRole = ActionRole.DEFAULT) -> None:
+    def __init__(self, icon_normal, icon_checked, text: str = "", role: ActionRole = ActionRole.DEFAULT, icon_hovered=None) -> None:
         super().__init__()
         self._hovered = False
         self._checked = False
@@ -58,11 +58,13 @@ class NavButton(QWidget):
         self.setObjectName("NavButton") # Set class name for stylesheet selector
         self.setMouseTracking(True)
         self.setCursor(Qt.PointingHandCursor)
+        self.setFixedHeight(48)  # 24px icon + 12px padding top/bottom
 
     
-        # Icons
+        # Icons (normal, checked, and optional hovered for action buttons)
         self.icon_normal = icon_normal
         self.icon_checked = icon_checked
+        self.icon_hovered = icon_hovered if icon_hovered else icon_normal
 
         # Root Layout
         nav_button_layout = QHBoxLayout()
@@ -88,8 +90,19 @@ class NavButton(QWidget):
 
 
         nav_button_layout.addWidget(self.txt_label)
-        nav_button_layout.addStretch()
+        
+        # ACTION buttons expand full width, DEFAULT buttons stay compact
+        if self._role == ActionRole.ACTION:
+            nav_button_layout.addStretch()
+        
         self.setLayout(nav_button_layout)
+        
+        # Set size policy: DEFAULT/MENU = compact, ACTION = expand
+        if self._role == ActionRole.DEFAULT or self._role == ActionRole.MENU:
+            self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+        else:
+            self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        
         self.updateStyle()
 
 
@@ -152,7 +165,7 @@ class NavButton(QWidget):
         styleMenu = f"""
                 QWidget#NavButton {{ 
                     background-color: transparent; 
-                    border-radius: 20px; 
+                    border-radius: 24px; 
                 }}
                 QLabel {{ 
                     color: transparent; 
@@ -164,7 +177,7 @@ class NavButton(QWidget):
         styleDefault = f"""
                 QWidget#NavButton {{ 
                     background-color: transparent; 
-                    border-radius: 20px; 
+                    border-radius: 24px; 
                 }}
                 QLabel {{ 
                     color: {vars['on_surface_variant']}; 
@@ -178,7 +191,7 @@ class NavButton(QWidget):
         styleHovered = f"""
                 QWidget#NavButton {{ 
                     background-color: {vars['surface_container_high']}; 
-                    border-radius: 20px; 
+                    border-radius: 24px; 
                 }}
                 QLabel {{ 
                     color: {vars['on_surface']}; 
@@ -192,7 +205,7 @@ class NavButton(QWidget):
         styleChecked = f"""
                 QWidget#NavButton {{ 
                     background-color: {vars['secondary_container']}; 
-                    border-radius: 20px; 
+                    border-radius: 24px; 
                 }}
                 QLabel {{ 
                     color: {vars['on_secondary_container']};
@@ -273,11 +286,16 @@ class NavButton(QWidget):
                 self.txt_label.hide()
                 self.icon_label.setPixmap(self.icon_normal.pixmap(24, 24))
         else:
-            # Checked, Collapsed
-            if self._checked == False:
-                self.icon_label.setPixmap(self.icon_normal.pixmap(24, 24))
-            else:
+            # Handle icon states for non-menu buttons
+            if self._role == ActionRole.ACTION and self._hovered:
+                # Action button hovered: use hovered icon
+                self.icon_label.setPixmap(self.icon_hovered.pixmap(24, 24))
+            elif self._checked:
+                # Checked state: use filled icon
                 self.icon_label.setPixmap(self.icon_checked.pixmap(24, 24))
+            else:
+                # Default state: use normal icon
+                self.icon_label.setPixmap(self.icon_normal.pixmap(24, 24))
 
             # COLLAPSED STATE For Button 
             if self._collapsed == True:
@@ -316,7 +334,7 @@ class NavigationRail(QWidget):
         btn_menu.clicked.connect(self.toggleCollapsedState)
         vlayout.addWidget(btn_menu)
 
-        btn_selfie = NavButton(self.ico_selfie, self.ico_selfie_filled, "Selfie", ActionRole.ACTION)
+        btn_selfie = NavButton(self.ico_selfie, self.ico_selfie_filled, "Selfie", ActionRole.ACTION, self.ico_selfie_hovered)
         # btn_selfie.setContentsMargins(0, 10, 0, 10)
         btn_selfie.page_id = 0
         self._buttons.append(btn_selfie)
@@ -439,8 +457,10 @@ class NavigationRail(QWidget):
         self.ico_menu = self._create_colored_icon(ico_menu, on_surface)
         self.ico_menu_open = self._create_colored_icon(ico_menu_open, on_surface)
 
-        # FAB/Action icons - M3: on_primary_container (normal), on_tertiary_container (selected)
+        # FAB/Action icons - M3: on_primary_container (normal), on_primary (hover), on_tertiary_container (selected)
+        on_primary = v.qcolor("on_primary")  # FAB hover icon
         self.ico_selfie = self._create_colored_icon(ico_selfie, on_primary_container)
+        self.ico_selfie_hovered = self._create_colored_icon(ico_selfie, on_primary)  # Hover state
         self.ico_selfie_filled = self._create_colored_icon(ico_selfie_filled, on_tertiary_container)
 
         # Navigation icons - M3: on_surface_variant (normal), on_secondary_container (selected)
