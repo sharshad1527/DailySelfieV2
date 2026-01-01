@@ -346,15 +346,15 @@ class NavigationRail(QWidget):
 
         self.ico_dashboard = self._create_colored_icon(ico_dashboard, primary)
         
-        self.ico_dashboard_filled = self._create_colored_icon(ico_dashboard_filled, primary_container)
+        self.ico_dashboard_filled = self._create_colored_icon(ico_dashboard_filled, on_primary)
 
         self.ico_calendar = self._create_colored_icon(ico_calendar, primary)
 
-        self.ico_calendar_filled = self._create_colored_icon(ico_calendar_filled, primary_container)
+        self.ico_calendar_filled = self._create_colored_icon(ico_calendar_filled, on_primary)
 
         self.ico_settings = self._create_colored_icon(ico_settings, primary)
         
-        self.ico_settings_filled = self._create_colored_icon(ico_settings_filled, primary_container)
+        self.ico_settings_filled = self._create_colored_icon(ico_settings_filled, on_primary)
 
         self.update()
 

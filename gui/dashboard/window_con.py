@@ -165,12 +165,15 @@ class DashboardShell(QMainWindow):
         btn_style = f"""
             QPushButton {{
                 background-color: transparent;
+                color: {var["on_surface"]};
                 border: 2px solid {var["outline_variant"]}; 
                 border-radius: 10px;
                 font-weight: bold;
                 font-size: 14px;
             }}
             QPushButton:hover {{
+                color: {var["on_surface_variant"]};
+
                 border: 2px solid {var["outline"]};
             }}
             QPushButton:pressed {{
@@ -181,6 +184,7 @@ class DashboardShell(QMainWindow):
         btn_close_style = f"""
             QPushButton {{
                 background-color: transparent;
+                color: {var["on_surface_variant"]};
                 border: 2px solid {var["outline_variant"]};
                 border-radius:10px;
                 font-weight: bold;

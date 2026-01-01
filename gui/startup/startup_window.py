@@ -205,7 +205,7 @@ class StartupWindow(BaseFramelessWindow):
             QPushButton {{
                 background-color: transparent;
                 border: 2px solid {vars["outline_variant"]};
-                border-radius: 20px;
+                border-radius: 18px;
             }}
             QPushButton:hover {{
                 border: 2px solid {vars["outline"]};
