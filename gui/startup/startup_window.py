@@ -61,6 +61,12 @@ class StartupWindow(BaseFramelessWindow):
         self._setup_flash_overlay()
         self._connect_signals()
 
+        # Apply initial theme & connect listener
+        self._apply_theme()
+        v = theme_vars()
+        if hasattr(v, "_controller"):
+             v._controller.themeChanged.connect(self._on_theme_changed)
+
     def _setup_logging(self):
         install_qt_logger()
         self.log_handler = QtSignalingHandler()
@@ -105,6 +111,72 @@ class StartupWindow(BaseFramelessWindow):
         self.ghost_slider.hoverStatus.connect(self._update_toast)
         self.ghost_slider.valueChanged.connect(self._on_ghost_opacity_change)
 
+    def _on_theme_changed(self):
+        self._apply_theme()
+        self.update()
+
+    def _apply_theme(self):
+        v = theme_vars()
+        
+        # 1. Background & Window Border (handled by BaseFramelessWindow)
+        self.update_window_theme()
+
+        # 2. Labels
+        lbl_style = f"color: {v['on_surface_variant']}; font-weight: bold;"
+        
+        self.label_ghost.setStyleSheet(f"color: {v['on_surface_variant']}; margin-left: 34px;")
+        self.label_mood.setStyleSheet(lbl_style)
+        self.label_note.setStyleSheet(lbl_style)
+
+        # 3. Preview Container
+        self.preview_lbl.setStyleSheet(f"""
+            background-color: {v["surface_container"]};
+            border-radius: 16px;
+        """)
+        
+        # 4. Countdown
+        self.countdown_lbl.setStyleSheet(f"""
+            background: transparent;
+            color: {v["on_surface"]};
+            font-weight: bold;
+        """)
+
+        # 5. Note Edit
+        self.note_edit.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {v["surface_container_low"]};
+                border: 2px solid {v["outline_variant"]};
+                border-radius: 8px;
+                padding: 8px;
+                color: {v["on_surface"]};
+            }}
+            QTextEdit:hover {{
+                border: 2px solid {v["outline"]};
+                background-color: {v["surface_container"]};
+            }}
+            QTextEdit:focus {{
+                border: 2px solid {v["primary"]};
+                background-color: {v["surface_container"]};
+            }}
+        """)
+
+        # 6. Mood Buttons
+        emoji_style = f"""
+            QPushButton {{
+                background-color: transparent;
+                border: 2px solid {v["outline_variant"]};
+                border-radius: 18px;
+            }}
+            QPushButton:hover {{
+                border: 2px solid {v["outline"]};
+            }}
+            QPushButton:checked {{
+                border: 2px solid {v["primary"]};
+            }}
+        """
+        for btn in self.mood_group.buttons():
+            btn.setStyleSheet(emoji_style)
+
     # ---------------------------------------------------------
     # UI Building
     # ---------------------------------------------------------
@@ -124,14 +196,10 @@ class StartupWindow(BaseFramelessWindow):
         left_layout.setContentsMargins(2,0,0,0)
         
         self.ghost_slider = GhostOpacitySlider()
-        vars = theme_vars()
+        self.ghost_slider = GhostOpacitySlider()
 
-        label = QLabel("Ghost")
-        label.setStyleSheet(f"""
-            color: {vars["on_surface_variant"]};
-            margin-left: 34px;
-        """)
-        left_layout.addWidget(label)
+        self.label_ghost = QLabel("Ghost")
+        left_layout.addWidget(self.label_ghost)
 
         left_layout.addWidget(self.ghost_slider, 1, Qt.AlignLeft)
         return left
@@ -148,12 +216,9 @@ class StartupWindow(BaseFramelessWindow):
         # Layers: Preview -> Ghost -> Countdown
         self.preview_lbl = QLabel()
         self.preview_lbl.setAlignment(Qt.AlignCenter)
-        vars = theme_vars()
-
-        self.preview_lbl.setStyleSheet(f"""
-            background-color: {vars["surface_container"]};
-            border-radius: 16px;
-        """)
+        self.preview_lbl = QLabel()
+        self.preview_lbl.setAlignment(Qt.AlignCenter)
+        # Style set in _apply_theme
 
         
         self.ghost_lbl = QLabel()
@@ -165,11 +230,9 @@ class StartupWindow(BaseFramelessWindow):
         
         self.countdown_lbl = QLabel("")
         self.countdown_lbl.setAlignment(Qt.AlignCenter)
-        self.countdown_lbl.setStyleSheet(f"""
-            background: transparent;
-            color: {vars["on_surface"]};
-            font-weight: bold;
-        """)
+        self.countdown_lbl = QLabel("")
+        self.countdown_lbl.setAlignment(Qt.AlignCenter)
+        # Style set in _apply_theme
 
         self.countdown_lbl.setFont(QFont("Arial", 96))
         self.countdown_lbl.hide()
@@ -259,9 +322,12 @@ class StartupWindow(BaseFramelessWindow):
 
         self.shutter_bar = ShutterBar(initial_timer=initial_timer)
 
-        right_layout.addWidget(QLabel("Mood", styleSheet="color:#B0B0B0"))
+        self.label_mood = QLabel("Mood")
+        self.label_note = QLabel("Note")
+
+        right_layout.addWidget(self.label_mood)
         right_layout.addLayout(moods_lo)
-        right_layout.addWidget(QLabel("Note", styleSheet="color:#B0B0B0"))
+        right_layout.addWidget(self.label_note)
         right_layout.addWidget(self.note_edit)
         
         right_layout.addSpacing(80) 

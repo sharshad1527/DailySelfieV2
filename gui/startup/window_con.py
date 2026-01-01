@@ -53,13 +53,12 @@ class BaseFramelessWindow(QMainWindow):
         self._root.setObjectName("root")
         self.setCentralWidget(self._root)
 
-        self._root.setStyleSheet(f"""
-            QWidget#root {{
-                background-color: {vars["background"]};
-                border-radius: 12px;
-                border: 2px solid {vars["outline_variant"]};
-            }}
-        """)
+        self._root.setObjectName("root")
+        self.setCentralWidget(self._root)
+        
+        # Initial style application handled by child class or explicit call, 
+        # but let's do it here to be safe if used directly.
+        self.update_window_theme()
 
         # Layout
         self._main_layout = QVBoxLayout(self._root)
@@ -83,43 +82,62 @@ class BaseFramelessWindow(QMainWindow):
         self._main_layout.addWidget(self._content, 1)
 
     def _init_top_bar(self):
-        vars = theme_vars()
-
         layout = QHBoxLayout(self._top_bar)
         layout.setContentsMargins(22, 0, 12, 0)
 
-        title = QLabel("Daily Selfie")
-        title.setStyleSheet(f"""
-            QLabel {{
-                color: {vars["on_surface"]};
-                font-size: 14px;
-                font-weight: 600;
-            }}
-        """)
+        self._title_lbl = QLabel("Daily Selfie")
+        
+        self._close_btn = QPushButton("✕")
+        self._close_btn.setFixedSize(32, 32)
+        self._close_btn.clicked.connect(self.close)
 
-        close_btn = QPushButton("✕")
-        close_btn.setFixedSize(32, 32)
-        close_btn.clicked.connect(self.close)
-
-        close_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent;
-                border: 2px solid {vars["outline_variant"]};
-                border-radius: 10px;
-                color: {vars["on_surface_variant"]};
-                font-weight: bold;
-                font-size: 14px;
-            }}
-            QPushButton:hover {{
-                border: 2px solid {vars["error"]};
-                color: {vars["error"]};
-            }}
-            QPushButton:pressed {{
-                background-color: {vars["error_container"]};
-                color: {vars["inverse_on_surface"]};
-            }}
-        """)
-
-        layout.addWidget(title)
+        layout.addWidget(self._title_lbl)
         layout.addStretch()
-        layout.addWidget(close_btn)
+        layout.addWidget(self._close_btn)
+        
+        # Apply styles
+        self.update_window_theme()
+
+    def update_window_theme(self):
+        """Re-applies theme variables to window elements."""
+        vars = theme_vars()
+
+        # 1. Root Container (Background & Border)
+        self._root.setStyleSheet(f"""
+            QWidget#root {{
+                background-color: {vars["background"]};
+                border-radius: 12px;
+                border: 2px solid {vars["outline_variant"]};
+            }}
+        """)
+
+        # 2. Title
+        if hasattr(self, "_title_lbl"):
+            self._title_lbl.setStyleSheet(f"""
+                QLabel {{
+                    color: {vars["on_surface"]};
+                    font-size: 14px;
+                    font-weight: 600;
+                }}
+            """)
+
+        # 3. Close Button
+        if hasattr(self, "_close_btn"):
+            self._close_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: transparent;
+                    border: 2px solid {vars["outline_variant"]};
+                    border-radius: 10px;
+                    color: {vars["on_surface_variant"]};
+                    font-weight: bold;
+                    font-size: 14px;
+                }}
+                QPushButton:hover {{
+                    border: 2px solid {vars["error"]};
+                    color: {vars["error"]};
+                }}
+                QPushButton:pressed {{
+                    background-color: {vars["error_container"]};
+                    color: {vars["inverse_on_surface"]};
+                }}
+            """)

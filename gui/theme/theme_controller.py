@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 # Add PySide6 imports for Signals
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, QFileSystemWatcher
+
 
 from gui.theme.theme_loader import (
     list_theme_files,
@@ -24,8 +25,9 @@ from gui.theme.theme_loader import (
 from gui.theme.schema import is_theme_usable, detect_modes_and_contrasts
 from gui.theme.theme_model import Theme
 
-from core.config import write_config
+from core.config import write_config, load_config
 from core.logging import get_logger
+
 
 
 # Inherit from QObject to support Signals
@@ -35,10 +37,11 @@ class ThemeController(QObject):
     # The app connects to this to trigger repaints (e.g., ShutterBar.update_theme).
     themeChanged = Signal()
 
-    def __init__(self, cfg: Dict, theme_dir: Path):
+    def __init__(self, cfg: Dict, theme_dir: Path, config_path: Path):
         super().__init__() # Initialize QObject
         self._cfg = cfg
         self._theme_dir = theme_dir
+        self._config_path = config_path
 
         theme_cfg = cfg.get("theme", {})
 
@@ -47,6 +50,9 @@ class ThemeController(QObject):
         self._contrast: str = theme_cfg.get("contrast", "standard")
 
         self._theme: Optional[Theme] = None
+
+        # Watcher is initialized lazily via start_watching()
+        self._watcher: Optional[QFileSystemWatcher] = None
 
     # -------------------------------------------------
     # Initialization
@@ -186,3 +192,67 @@ class ThemeController(QObject):
     @property
     def contrast(self) -> str:
         return self._contrast
+
+    # -------------------------------------------------
+    # File Watching (Live Updates)
+    # -------------------------------------------------
+    def start_watching(self):
+        """
+        Start watching config.toml for changes.
+        MUST be called after QApplication is instantiated.
+        """
+        if self._watcher is not None:
+            return
+
+        self._watcher = QFileSystemWatcher([str(self._config_path)], self)
+        self._watcher.fileChanged.connect(self._on_config_file_changed)
+
+    def _on_config_file_changed(self, path: str):
+        """Called when config.toml is modified externally."""
+        try:
+            # Re-add to watcher if it was dropped (common with atomic replacements)
+            # Check if watcher exists and files list doesn't contain path
+            if self._watcher and str(self._config_path) not in self._watcher.files():
+                self._watcher.addPath(str(self._config_path))
+            
+            # Briefly sleep? Sometimes file system events imply file is still locked or writing.
+            # But let's try direct load first.
+            if not Path(path).exists():
+                return
+            
+            new_cfg = load_config(Path(path))
+            t_cfg = new_cfg.get("theme", {})
+            
+            new_name = t_cfg.get("name")
+            new_mode = t_cfg.get("mode")
+            new_contrast = t_cfg.get("contrast")
+
+            changed = False
+
+            if new_name and new_name != self._theme_name:
+                # Load new theme content
+                try:
+                    self._load_theme(new_name)
+                    changed = True
+                except ThemeLoaderError:
+                    pass
+            
+            # If theme loaded ok (or didn't change), update variations
+            if new_mode and new_mode != self._mode:
+                if self._theme and self._theme.has_mode(new_mode):
+                    self._mode = new_mode
+                    changed = True
+            
+            if new_contrast and new_contrast != self._contrast:
+                if self._theme and self._theme.has_contrast(self._mode, new_contrast):
+                    self._contrast = new_contrast
+                    changed = True
+            
+            if changed:
+                # Update internal config reference so we don't overwrite with old data on save()
+                self._cfg = new_cfg
+                print(f"[ThemeController] Live update detected: {self._theme_name} / {self._mode}")
+                self.themeChanged.emit()
+
+        except Exception as e:
+            print(f"Error reloading config: {e}")

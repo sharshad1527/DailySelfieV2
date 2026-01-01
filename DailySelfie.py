@@ -272,7 +272,7 @@ def main(argv=None):
             return 1
 
     # 3. Initialize Controller
-    theme_controller = ThemeController(cfg, theme_dir)
+    theme_controller = ThemeController(cfg, theme_dir, config_path)
     theme_controller.initialize()
 
     # 4. Apply CLI Theme Overrides
@@ -335,6 +335,9 @@ def main(argv=None):
         from gui.startup.startup_window import StartupWindow
 
         app = QApplication(sys.argv)
+        # Start watching config for changes now that we have an event loop
+        theme_controller.start_watching()
+        
         win = StartupWindow(allow_retake=final_allow_retake)
         win.show()
         return app.exec()

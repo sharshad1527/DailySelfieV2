@@ -93,6 +93,12 @@ class ShutterBar(QWidget):
         self._apply_icon_theme()
         self._apply_review_button_theme()
 
+        # Listen for theme changes (live switching)
+        v = theme_vars()
+        # Accessing private _controller is safe here as this widget is tightly coupled to the theme system
+        if hasattr(v, "_controller"):
+             v._controller.themeChanged.connect(self._on_theme_changed)
+
     # --------------------------------------------------
     # Helpers
     # --------------------------------------------------
@@ -193,36 +199,71 @@ class ShutterBar(QWidget):
         p.setBrush(v.qcolor("surface_container"))
         p.drawRoundedRect(self.rect(), 40, 40)
 
-        # 2. Shutter Background
-        # Changes color slightly when pressed
+        # --------------------------------------------------
+        # 2. Flash (Light) Button
+        # --------------------------------------------------
+        # M3 Icon Button:
+        # Standard: Transparent background
+        # Selected (Toggle): secondary_container background
+        flash_rect = self.light_btn.geometry()
+        is_flash_checked = self.light_btn.isChecked()
+        
+        if is_flash_checked:
+            p.setBrush(v.qcolor("secondary_container"))
+            p.drawRoundedRect(flash_rect, 22, 22) # Circle if 44x44
+        
+        # State Layer (Hover/Press)
+        self._paint_state_layer(p, self.light_btn, flash_rect, 22)
+
+        # --------------------------------------------------
+        # 3. Shutter Button
+        # --------------------------------------------------
+        # M3 FAB / Shutter
         shutter_color = v.qcolor("primary_fixed_dim") if self._shutter_pressed else v.qcolor("primary")
         p.setBrush(shutter_color)
         p.drawRoundedRect(self.shutter_rect, 32, 32)
+        
+        # State Layer for Shutter
+        # Shutter hover color is usually on_primary_fixed or similar
+        self._paint_state_layer(p, self.shutter_btn, self.shutter_rect, 32, base_color_token="on_primary")
 
-        # 3. Flash glow (only when ON)
-        if self.light_btn.isChecked():
-            glow = self.light_btn.geometry().adjusted(-4, -4, 4, 4)
-            p.setBrush(v.rgba("primary", 0.25))
-            p.drawEllipse(glow)
-
-        # 4. Timer Background
+        # --------------------------------------------------
+        # 4. Timer Button
+        # --------------------------------------------------
+        # M3 Tonal Button / Chip
+        # Active: secondary_container
+        # Inactive: surface_container_highest (to allow seeing it) or surface_container_low
         active = self._timer_value > 0
-        p.setBrush(
-            v.qcolor("surface_container_high")
-            if active else v.qcolor("surface_container_low")
-        )
+        if active:
+            bg_color = v.qcolor("secondary_container")
+            text_color = v.qcolor("on_secondary_container")
+            icon_color = v.qcolor("on_secondary_container") # If we were using icon
+        else:
+            bg_color = v.qcolor("surface_container_highest")
+            text_color = v.qcolor("on_surface_variant")
+            # We used surface_container_low before, but highest is better for buttons on surface
+            
+        p.setBrush(bg_color)
         p.drawRoundedRect(self.timer_rect, 18, 18)
 
-        # 5. Timer Content (Text or Icon)
+        # State Layer
+        self._paint_state_layer(p, self.timer_btn, self.timer_rect, 18, base_color_token="on_secondary_container" if active else "on_surface")
+
+        # Content (Text or Icon)
         if active:
-            p.setPen(v.qcolor("primary"))
+            p.setPen(text_color)
             font = QFont()
             font.setBold(True)
             font.setPointSize(11)
             p.setFont(font)
             p.drawText(self.timer_rect, Qt.AlignCenter, f"{self._timer_value}s")
+            p.setPen(Qt.NoPen)
         else:
             # Draw the colorized icon we prepared in _apply_icon_theme
+            # We need to make sure the icon color matches the inactive state logic
+            # The icon in `_timer_icon` is pre-colored. We might need to update it 
+            # if we changed the background colors logic significantly, but 
+            # `surface_container_highest` + `on_surface_variant` is standard.
             icon_rect = QRect(
                 self.timer_rect.center().x() - 10,
                 self.timer_rect.center().y() - 10,
@@ -230,6 +271,35 @@ class ShutterBar(QWidget):
                 20,
             )
             self._timer_icon.paint(p, icon_rect, Qt.AlignCenter)
+
+    def _paint_state_layer(self, painter: QPainter, widget: QWidget, rect: QRect, radius: int, base_color_token: str = "on_surface"):
+        """
+        Paints M3 state layer (Hover/Press).
+        Hover: 8% opacity
+        Press: 12% opacity
+        """
+        if not widget.isEnabled():
+            return
+
+        v = theme_vars()
+        state_color = v.qcolor(base_color_token)
+        
+        opacity = 0.0
+        if widget.isDown() or (hasattr(widget, "isChecked") and widget.isChecked() and widget != self.light_btn):
+            # Note: Toggle buttons usually handle 'checked' via background color changes, 
+            # so state layer is just for interaction. We check isDown() for press.
+            # But if we wanted a persistent selection overlay we could add it.
+            # Here we just want interaction feedback.
+            if widget.isDown():
+                opacity = 0.12
+        elif widget.underMouse():
+            opacity = 0.08
+        
+        if opacity > 0:
+            state_color.setAlphaF(opacity)
+            painter.setBrush(state_color)
+            painter.drawRoundedRect(rect, radius, radius)
+            painter.setBrush(Qt.NoBrush)  # Reset
 
     # --------------------------------------------------
     # Theme helpers
@@ -242,23 +312,24 @@ class ShutterBar(QWidget):
         """
         v = theme_vars()
 
-        # Define colors
-        color_inactive = v.qcolor("on_surface_variant")
-        color_active = v.qcolor("primary")
-        # Shutter icon sits on 'primary' background, so use 'on_primary' (usually white/black)
-        color_on_primary = v.qcolor("on_primary")
-
-        # 1. Light Button Icon
-        # If checked, use active color; otherwise inactive color.
-        flash_color = color_active if self.light_btn.isChecked() else color_inactive
+        # 1. Light Button Icon (Toggle)
+        # Checked: on_secondary_container (since bg is secondary_container)
+        # Unchecked: on_surface_variant (Standard Icon Button)
+        if self.light_btn.isChecked():
+            flash_color = v.qcolor("on_secondary_container")
+        else:
+            flash_color = v.qcolor("on_surface_variant")
+            
         self.light_btn.setIcon(self._create_colored_icon("light.svg", flash_color))
 
         # 2. Timer Icon (used in paintEvent)
-        # Always use the inactive color for the "off" state icon
-        self._timer_icon = self._create_colored_icon("timer.svg", color_inactive)
+        # Inactive container: surface_container_highest
+        # Inactive content: on_surface_variant
+        self._timer_icon = self._create_colored_icon("timer.svg", v.qcolor("on_surface_variant"))
         
         # 3. Shutter Icon
-        self.shutter_btn.setIcon(self._create_colored_icon("shutter.svg", color_on_primary))
+        # Container: Primary -> Content: On Primary
+        self.shutter_btn.setIcon(self._create_colored_icon("shutter.svg", v.qcolor("on_primary")))
 
         # Trigger a repaint to show changes
         self.update()
@@ -334,4 +405,10 @@ class ShutterBar(QWidget):
         
         # Emit signal
         self.lightToggled.emit(self.light_btn.isChecked())
+        self.update()
+
+    def _on_theme_changed(self):
+        """Called when the ThemeController switches modes/contrasts."""
+        self._apply_icon_theme()
+        self._apply_review_button_theme()
         self.update()
