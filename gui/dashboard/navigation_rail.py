@@ -1,4 +1,5 @@
 # gui/dashboard/navigation_rail.py
+from enum import Enum
 from PySide6.QtWidgets import QPushButton
 from PySide6.QtWidgets import QLabel
 from pathlib import Path
@@ -21,6 +22,9 @@ vars = theme_vars()
 ico_menu = "menu.svg"
 ico_menu_open = "menu_open.svg"
 
+ico_selfie = "selfie.svg"
+ico_selfie_filled = "selfie_filled.svg"
+
 ico_dashboard = "dashboard.svg"
 ico_dashboard_filled = "dashboard_filled.svg"
 
@@ -30,15 +34,22 @@ ico_calendar_filled = "today_filled.svg"
 ico_settings = "settings.svg"
 ico_settings_filled = "settings_filled.svg"
 
+
+class ActionRole(Enum):
+    ACTION = "action"
+    DEFAULT = "default"
+    MENU = "menu"
+
+
 class NavButton(QWidget):
     clicked = Signal() # Add a Click Signal
     
-    def __init__(self, icon_normal, icon_checked, text: str = "", isbtnmenu: bool = False) -> None:
+    def __init__(self, icon_normal, icon_checked, text: str = "", role: ActionRole = ActionRole.DEFAULT) -> None:
         super().__init__()
         self._hovered = False
         self._checked = False
         self._collapsed = False
-        self._isbtnmenu = isbtnmenu
+        self._role = role
         self.page_id = None
 
 
@@ -48,19 +59,34 @@ class NavButton(QWidget):
         self.setMouseTracking(True)
         self.setCursor(Qt.PointingHandCursor)
 
+    
+        # Icons
         self.icon_normal = icon_normal
         self.icon_checked = icon_checked
 
+        # Root Layout
         nav_button_layout = QHBoxLayout()
-        nav_button_layout.setContentsMargins(12, 12, 10, 10)
+        nav_button_layout.setContentsMargins(16, 12, 16, 12)
         nav_button_layout.setSpacing(8)
 
-        self.icon_label = QLabel()
-        self.icon_label.setPixmap(self.icon_normal.pixmap(24, 24))
+        # Text Label
         self.txt_label = QLabel()
         self.txt_label.setText(text)
 
-        nav_button_layout.addWidget(self.icon_label)
+        # Icon Container
+        self.icon_container = QWidget()
+        icon_layout = QHBoxLayout(self.icon_container)
+        icon_layout.setContentsMargins(0, 0, 0, 0)
+        icon_layout.setAlignment(Qt.AlignCenter)
+
+        self.icon_label = QLabel()
+        self.icon_label.setPixmap(self.icon_normal.pixmap(24, 24))
+
+        icon_layout.addWidget(self.icon_label)
+
+        nav_button_layout.addWidget(self.icon_container)
+
+
         nav_button_layout.addWidget(self.txt_label)
         nav_button_layout.addStretch()
         self.setLayout(nav_button_layout)
@@ -106,12 +132,24 @@ class NavButton(QWidget):
     def isCollapsed(self) -> bool:
         return self._collapsed
 
+    def _apply_layout_mode(self):
+        layout = self.layout()
+
+        if self._collapsed:
+            layout.setAlignment(self.icon_container, Qt.AlignCenter)
+        else:
+            layout.setAlignment(self.icon_container, Qt.AlignLeft)
+
 
     # Update the style of the navbutton
     def updateStyle(self):
-        # Style For Menu Button
-        if self._isbtnmenu  == True:
-            self.setStyleSheet(f"""
+        # Material 3 Navigation Rail Color Guidelines:
+        # - Default: Container transparent, Icon/Text uses on_surface_variant
+        # - Hovered: Container uses surface_container_high (state layer), Icon/Text uses on_surface
+        # - Selected: Container uses secondary_container, Icon/Text uses on_secondary_container
+        # - FAB/Action: Container uses primary_container, Icon uses on_primary_container
+
+        styleMenu = f"""
                 QWidget#NavButton {{ 
                     background-color: transparent; 
                     border-radius: 20px; 
@@ -120,61 +158,113 @@ class NavButton(QWidget):
                     color: transparent; 
                     background-color: transparent; 
                 }}
-            """)
-        
-        # Style For Button When Checked
-        elif self._checked:
-            # CHECKED STATE
-            # Material 3 Rule: Active/Selected items use the Secondary Container color.
-            # Color Role: Secondary Container (Background)
-            # Content Color: On Secondary Container (Text/Icon)
-            self.setStyleSheet(f"""
-                QWidget#NavButton {{ 
-                    background-color: {vars['primary']}; 
-                    border-radius: 20px; 
-                }}
-                QLabel {{ 
-                    color: {vars['on_primary']}; 
-                    background-color: transparent; 
-                }}
-            """)
-        
-        # Style For Button When Hovered
-        elif self._hovered:
-            # HOVER STATE
-            # Material 3 Rule: Hover state uses a state layer (usually 8% opacity on surface).
-            # Proxy Color: Surface Container Highest (approximates the hover depth).
-            # Content Color: On Surface
-            self.setStyleSheet(f"""
-                QWidget#NavButton {{ 
-                    background-color: {vars['surface_container_highest']}; 
-                    border-radius: 20px; 
-                }}
-                QLabel {{ 
-                    color: {vars['on_surface']}; 
-                    background-color: transparent; 
-                }}
-            """)
-        
-        # Style For Button When Default
-        else:
-            # DEFAULT STATE
-            # Material 3 Rule: Inactive items sit on the surface (transparent container).
-            # Color Role: Transparent
-            # Content Color: On Surface Variant (Low emphasis for inactive items)
-            self.setStyleSheet(f"""
+            """
+
+        # DEFAULT STATE - M3: transparent container, on_surface_variant for icon/text
+        styleDefault = f"""
                 QWidget#NavButton {{ 
                     background-color: transparent; 
                     border-radius: 20px; 
                 }}
                 QLabel {{ 
                     color: {vars['on_surface_variant']}; 
+                    font-size: 15px;
+                    font-weight: 500;
                     background-color: transparent; 
                 }}
-            """)
+            """
+
+        # HOVERED STATE - M3: surface_container_high for state layer, on_surface for icon/text
+        styleHovered = f"""
+                QWidget#NavButton {{ 
+                    background-color: {vars['surface_container_high']}; 
+                    border-radius: 20px; 
+                }}
+                QLabel {{ 
+                    color: {vars['on_surface']}; 
+                    font-size: 15px;
+                    font-weight: 500;
+                    background-color: transparent; 
+                }}
+            """
+
+        # CHECKED/SELECTED STATE - M3: secondary_container, on_secondary_container for icon/text
+        styleChecked = f"""
+                QWidget#NavButton {{ 
+                    background-color: {vars['secondary_container']}; 
+                    border-radius: 20px; 
+                }}
+                QLabel {{ 
+                    color: {vars['on_secondary_container']};
+                    font-size: 15px;
+                    font-weight: 500;
+                    background-color: transparent; 
+                }}
+            """
+
+        # ACTION (FAB) DEFAULT - M3: primary_container, on_primary_container
+        styleActionDefault = f"""
+                QWidget#NavButton {{ 
+                    background-color: {vars['primary_container']}; 
+                    border-radius: 16px; 
+                }}
+                QLabel {{ 
+                    color: {vars['on_primary_container']}; 
+                    background-color: transparent; 
+                }}
+            """
+
+        # ACTION (FAB) HOVERED - M3: Slightly elevated/highlighted primary_container
+        styleActionHovered = f"""
+                QWidget#NavButton {{ 
+                    background-color: {vars['primary']}; 
+                    border-radius: 16px; 
+                }}
+                QLabel {{ 
+                    color: {vars['on_primary']}; 
+                    background-color: transparent; 
+                }}
+            """
+
+        # ACTION (FAB) CHECKED - M3: tertiary_container for emphasis
+        styleActionChecked = f"""
+                QWidget#NavButton {{ 
+                    background-color: {vars['tertiary_container']}; 
+                    border-radius: 16px; 
+                }}
+                QLabel {{ 
+                    color: {vars['on_tertiary_container']}; 
+                    background-color: transparent; 
+                }}
+            """
+
+        # Style For Menu Button
+        if self._role == ActionRole.MENU:
+            self.setStyleSheet(styleMenu)
+        
+        # Style For Button When Checked
+        elif self._checked:
+            if self._role == ActionRole.DEFAULT:
+                self.setStyleSheet(styleChecked)
+            elif self._role == ActionRole.ACTION:
+                self.setStyleSheet(styleActionChecked)
+                
+        # Style For Button When Hovered
+        elif self._hovered:
+            if self._role == ActionRole.DEFAULT:
+                self.setStyleSheet(styleHovered)
+            elif self._role == ActionRole.ACTION:
+                self.setStyleSheet(styleActionHovered)
+        
+        # Style For Button When Default
+        else:
+            if self._role == ActionRole.DEFAULT:
+                self.setStyleSheet(styleDefault)
+            elif self._role == ActionRole.ACTION:
+                self.setStyleSheet(styleActionDefault)
 
         # Menu Button OR NavButton
-        if self._isbtnmenu == True:
+        if self._role == ActionRole.MENU:
             # COLLAPSED STATE For Menu Button
             if self._collapsed == False:
                 self.txt_label.hide()
@@ -183,7 +273,7 @@ class NavButton(QWidget):
                 self.txt_label.hide()
                 self.icon_label.setPixmap(self.icon_normal.pixmap(24, 24))
         else:
-            # Checked Or Collapsed
+            # Checked, Collapsed
             if self._checked == False:
                 self.icon_label.setPixmap(self.icon_normal.pixmap(24, 24))
             else:
@@ -192,15 +282,16 @@ class NavButton(QWidget):
             # COLLAPSED STATE For Button 
             if self._collapsed == True:
                 self.txt_label.hide()
+                self._apply_layout_mode()
             else:
                 self.txt_label.show()
-
+                self._apply_layout_mode()
         
 
 
 class NavigationRail(QWidget):
     EXPANDED_WIDTH = 200 # 200px
-    COLLAPSED_WIDTH = 60 # 60px
+    COLLAPSED_WIDTH = 72 # 60px
 
     pageSelected = Signal(int)
 
@@ -210,32 +301,38 @@ class NavigationRail(QWidget):
         vars = theme_vars()
         self._is_collapsed = False # Defaultly Collapsed
         self._buttons = [] # Button List
-        self._menu_button = None # menu button
     
 
         vlayout = QVBoxLayout(self)
-        vlayout.setContentsMargins(0, 0, 10, 10)
+        vlayout.setContentsMargins(8, 12, 8, 12)
         vlayout.setSpacing(8)
 
         self._apply_icon_theme()
 
         # Menu Button
-        btn_menu = NavButton(self.ico_menu, self.ico_menu_open, "", True)
-        # self._buttons.append(btn_menu) # Old
-        self._menu_button = btn_menu # New
+        btn_menu = NavButton(self.ico_menu, self.ico_menu_open, "", ActionRole.MENU)
+        self._buttons.append(btn_menu) # Old
+        # self._menu_button = btn_menu # New
         btn_menu.clicked.connect(self.toggleCollapsedState)
         vlayout.addWidget(btn_menu)
 
+        btn_selfie = NavButton(self.ico_selfie, self.ico_selfie_filled, "Selfie", ActionRole.ACTION)
+        # btn_selfie.setContentsMargins(0, 10, 0, 10)
+        btn_selfie.page_id = 0
+        self._buttons.append(btn_selfie)
+        btn_selfie.clicked.connect(lambda: self.toggleCheckedState(btn_selfie))
+        vlayout.addWidget(btn_selfie)
+        vlayout.addSpacing(20)
         # Dashboard Button
         btn_dashboard = NavButton(self.ico_dashboard, self.ico_dashboard_filled, "Dashboard")
-        btn_dashboard.page_id = 0
+        btn_dashboard.page_id = 1
         self._buttons.append(btn_dashboard)
         btn_dashboard.clicked.connect(lambda: self.toggleCheckedState(btn_dashboard))
         vlayout.addWidget(btn_dashboard)
 
         # Calendar Button
         btn_calendar = NavButton(self.ico_calendar, self.ico_calendar_filled, "Calendar")
-        btn_calendar.page_id = 1
+        btn_calendar.page_id = 2
         self._buttons.append(btn_calendar)
         btn_calendar.clicked.connect(lambda: self.toggleCheckedState(btn_calendar))
         vlayout.addWidget(btn_calendar)
@@ -244,7 +341,7 @@ class NavigationRail(QWidget):
 
         # Settings Button
         btn_settings = NavButton(self.ico_settings, self.ico_settings_filled, "Settings")
-        btn_settings.page_id = 2
+        btn_settings.page_id = 3
         self._buttons.append(btn_settings)
         btn_settings.clicked.connect(lambda: self.toggleCheckedState(btn_settings))
         vlayout.addWidget(btn_settings)
@@ -320,41 +417,41 @@ class NavigationRail(QWidget):
 
     # Apply Icon Theme
     def _apply_icon_theme(self):
-
         """
         Regenerates all icons using the current theme colors.
+        
+        Material 3 Navigation Rail Icon Guidelines:
+        - Unselected icons: on_surface_variant (medium emphasis)
+        - Selected icons: on_secondary_container (matches active indicator)
+        - FAB/Action icons: on_primary_container (normal), on_tertiary_container (selected)
+        - Menu icons: on_surface (high emphasis for utility)
         """
         v = theme_vars()
 
-        # Colors
-        primary = v.qcolor("primary")
-        on_primary = v.qcolor("on_primary")
-        primary_container = v.qcolor("primary_container")
-        on_primary_container = v.qcolor("on_primary_container")
-        
-        # Define colors
-        # on_secondary_container = v.qcolor("on_secondary_container")
-        # on_surface = v.qcolor("on_surface")
-        # on_surface_variant = v.qcolor("on_surface_variant")
-        
-        # WORKING METHOD SET A PIXMAP TO A QLabel AND SET SIZE 24 24
-        # print(ico_menu)
-        # self.menu_btn.setPixmap(ico_menu.pixmap(24, 24))
-        self.ico_menu = self._create_colored_icon(ico_menu, primary)
-        
-        self.ico_menu_open = self._create_colored_icon(ico_menu_open, primary)
+        # Material 3 icon colors
+        on_surface = v.qcolor("on_surface")  # Menu icons
+        on_surface_variant = v.qcolor("on_surface_variant")  # Unselected nav icons
+        on_secondary_container = v.qcolor("on_secondary_container")  # Selected nav icons
+        on_primary_container = v.qcolor("on_primary_container")  # FAB icons
+        on_tertiary_container = v.qcolor("on_tertiary_container")  # FAB selected icons
 
-        self.ico_dashboard = self._create_colored_icon(ico_dashboard, primary)
-        
-        self.ico_dashboard_filled = self._create_colored_icon(ico_dashboard_filled, on_primary)
+        # Menu icons - use on_surface for utility icon
+        self.ico_menu = self._create_colored_icon(ico_menu, on_surface)
+        self.ico_menu_open = self._create_colored_icon(ico_menu_open, on_surface)
 
-        self.ico_calendar = self._create_colored_icon(ico_calendar, primary)
+        # FAB/Action icons - M3: on_primary_container (normal), on_tertiary_container (selected)
+        self.ico_selfie = self._create_colored_icon(ico_selfie, on_primary_container)
+        self.ico_selfie_filled = self._create_colored_icon(ico_selfie_filled, on_tertiary_container)
 
-        self.ico_calendar_filled = self._create_colored_icon(ico_calendar_filled, on_primary)
+        # Navigation icons - M3: on_surface_variant (normal), on_secondary_container (selected)
+        self.ico_dashboard = self._create_colored_icon(ico_dashboard, on_surface_variant)
+        self.ico_dashboard_filled = self._create_colored_icon(ico_dashboard_filled, on_secondary_container)
 
-        self.ico_settings = self._create_colored_icon(ico_settings, primary)
-        
-        self.ico_settings_filled = self._create_colored_icon(ico_settings_filled, on_primary)
+        self.ico_calendar = self._create_colored_icon(ico_calendar, on_surface_variant)
+        self.ico_calendar_filled = self._create_colored_icon(ico_calendar_filled, on_secondary_container)
+
+        self.ico_settings = self._create_colored_icon(ico_settings, on_surface_variant)
+        self.ico_settings_filled = self._create_colored_icon(ico_settings_filled, on_secondary_container)
 
         self.update()
 
