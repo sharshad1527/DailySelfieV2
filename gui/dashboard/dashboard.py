@@ -11,6 +11,7 @@ try:
 except:
     from window_con import DashboardShell
 
+from gui.dashboard.pages.selfie import SelfiePage
 from gui.dashboard.pages.dashboard import DashboardPage
 from gui.dashboard.pages.calendar import CalendarPage
 from gui.dashboard.pages.settings import SettingsPage
@@ -33,12 +34,13 @@ class DashboardWindow(DashboardShell):
         self._navigation_rail = NavigationRail()
         layout.addWidget(self._navigation_rail)
         
-        self._pages.insertWidget(0, DashboardPage())
-        self._pages.insertWidget(1, CalendarPage())
-        self._pages.insertWidget(2, SettingsPage())
+        self._pages.insertWidget(1, SelfiePage())
+        self._pages.insertWidget(2, DashboardPage())
+        self._pages.insertWidget(3, CalendarPage())
+        self._pages.insertWidget(4, SettingsPage())
 
         layout.addWidget(self._pages, 1)
-        self._pages.setCurrentIndex(0)
+        self._pages.setCurrentIndex(1)
         self._navigation_rail.pageSelected.connect(self._onPageSelected)
         layout.addStretch()
 
