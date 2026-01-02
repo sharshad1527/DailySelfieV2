@@ -287,7 +287,7 @@ class NavButton(QWidget):
                 self.icon_label.setPixmap(self.icon_normal.pixmap(24, 24))
         else:
             # Handle icon states for non-menu buttons
-            if self._role == ActionRole.ACTION and self._hovered:
+            if self._role == ActionRole.ACTION and self._hovered and self._checked == False:
                 # Action button hovered: use hovered icon
                 self.icon_label.setPixmap(self.icon_hovered.pixmap(24, 24))
             elif self._checked:
