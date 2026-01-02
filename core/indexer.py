@@ -100,15 +100,15 @@ class Indexer:
         notes = entry.get("notes")
         action = entry.get("action", "capture")
 
-        self._conn.execute(
-            """
-            INSERT OR REPLACE INTO captures
-            (id, ts, path, width, height, resolution, mood, notes, action, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (eid, ts, path, width, height, resolution, mood, notes, action, now),
-        )
-        self._conn.commit()
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT OR REPLACE INTO captures
+                (id, ts, path, width, height, resolution, mood, notes, action, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (eid, ts, path, width, height, resolution, mood, notes, action, now),
+            )
 
     def get_captures_by_month(self, year: int, month: int) -> List[Dict[str, Any]]:
         """
@@ -140,11 +140,11 @@ class Indexer:
         """
         if not meta:
             return
-        if "mood" in meta:
-            self._conn.execute("UPDATE captures SET mood = ? WHERE id = ?", (meta.get("mood"), eid))
-        if "notes" in meta:
-            self._conn.execute("UPDATE captures SET notes = ? WHERE id = ?", (meta.get("notes"), eid))
-        self._conn.commit()
+        with self._conn:
+            if "mood" in meta:
+                self._conn.execute("UPDATE captures SET mood = ? WHERE id = ?", (meta.get("mood"), eid))
+            if "notes" in meta:
+                self._conn.execute("UPDATE captures SET notes = ? WHERE id = ?", (meta.get("notes"), eid))
 
     def migrate_from_jsonl(self, jsonl_path: Path, report_every: int = 1000) -> int:
         """
