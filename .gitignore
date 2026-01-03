@@ -7,3 +7,4 @@ __pycache__
 dist
 dist/
 .ds_dev/
+.agent/
