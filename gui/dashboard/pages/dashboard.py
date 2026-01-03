@@ -7,7 +7,7 @@ from PySide6.QtGui import QPixmap, QIcon, QPainter, QMovie
 from PySide6.QtWidgets import QFrame, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QPushButton, QSizePolicy
 
 from gui.theme.theme_vars import theme_vars
-from core.storage import last_image_for_date
+from core.storage import last_image_for_date, delete_path
 from core.paths import get_app_paths
 from core.index_api import get_api
 
@@ -112,11 +112,22 @@ class TodaySelfieCard(QFrame):
             self.set_empty_state()
 
     def _clear_content(self):
-        """Remove existing content widget if any."""
+        """Remove existing content widget and selfie label if any."""
         if self._content_widget:
             self._layout.removeWidget(self._content_widget)
             self._content_widget.deleteLater()
             self._content_widget = None
+        
+        # Also remove selfie_label if it exists (added directly in set_taken_state)
+        if hasattr(self, 'selfie_label') and self.selfie_label:
+            self._layout.removeWidget(self.selfie_label)
+            self.selfie_label.deleteLater()
+            self.selfie_label = None
+        
+        # Reset internal state
+        self._image_path = None
+        self._metadata = {}
+        self._current_image_height = 0
 
     def set_empty_state(self):
         """
@@ -399,10 +410,14 @@ class TodaySelfieInfoBox(QFrame):
     Info box showing mood, note, and retake button for today's selfie.
     Placed between selfie card and side column.
     """
+    delete_requested = Signal()  # Emitted when user deletes today's photo
+    
     def __init__(self, selfie_card: TodaySelfieCard):
         super().__init__()
         self._vars = theme_vars()
         self._selfie_card = selfie_card
+        self._image_path = None
+        self._metadata = {}
 
         self.setObjectName("TodaySelfieInfoBox")
         self.setMinimumWidth(160)
@@ -557,7 +572,24 @@ class TodaySelfieInfoBox(QFrame):
             res_row.addStretch()
             self._layout.addLayout(res_row)
 
+        # ---- Horizontal line before Mood section ----
+        mood_separator = QFrame()
+        mood_separator.setFrameShape(QFrame.HLine)
+        mood_separator.setStyleSheet(f"""
+            background-color: {self._vars['outline_variant']};
+        """)
+        mood_separator.setFixedHeight(1)
+        self._layout.addWidget(mood_separator)
+
         # ---- Mood section ----
+        mood_section_label = QLabel("Mood selected today")
+        mood_section_label.setStyleSheet(f"""
+            color: {self._vars['on_surface_variant']};
+            font-size: 10px;
+            font-weight: 500;
+        """)
+        self._layout.addWidget(mood_section_label)
+
         mood_value = metadata.get("mood")
         if mood_value and mood_value in MOOD_GIF_MAP:
             mood_row = QHBoxLayout()
@@ -591,7 +623,7 @@ class TodaySelfieInfoBox(QFrame):
             mood_row.addStretch()
             self._layout.addLayout(mood_row)
         else:
-            no_mood = QLabel("😶 No mood")
+            no_mood = QLabel("No mood")
             no_mood.setStyleSheet(f"""
                 color: {self._vars['on_surface_variant']};
                 font-size: 10px;
@@ -599,21 +631,59 @@ class TodaySelfieInfoBox(QFrame):
             """)
             self._layout.addWidget(no_mood)
 
+        # ---- Horizontal line before Notes section ----
+        notes_separator = QFrame()
+        notes_separator.setFrameShape(QFrame.HLine)
+        notes_separator.setStyleSheet(f"""
+            background-color: {self._vars['outline_variant']};
+        """)
+        notes_separator.setFixedHeight(1)
+        self._layout.addWidget(notes_separator)
+
         # ---- Note section ----
+        notes_section_label = QLabel("Notes")
+        notes_section_label.setStyleSheet(f"""
+            color: {self._vars['on_surface_variant']};
+            font-size: 10px;
+            font-weight: 500;
+        """)
+        self._layout.addWidget(notes_section_label)
+
         note_value = metadata.get("notes")
         if note_value:
             note_text = note_value[:35] + "..." if len(note_value) > 35 else note_value
-            note_label = QLabel(f"📝 {note_text}")
+            
+            note_row = QHBoxLayout()
+            note_row.setSpacing(6)
+            note_row.setContentsMargins(0, 0, 0, 0)
+            
+            notes_icon = self._create_colored_icon(
+                "notes.svg",
+                self._vars.qcolor('on_surface_variant')
+            )
+            
+            note_icon_label = QLabel()
+            note_icon_label.setPixmap(notes_icon.pixmap(16, 16))
+            note_icon_label.setFixedWidth(16)
+            note_row.addWidget(note_icon_label)
+            
+            note_label = QLabel(note_text)
             note_label.setWordWrap(True)
             note_label.setStyleSheet(f"""
                 color: {self._vars['on_surface_variant']};
                 font-size: 10px;
-                background-color: {self._vars['surface_container_low']};
-                border: 1px solid {self._vars['outline_variant']};
-                border-radius: 4px;
-                padding: 4px;
             """)
-            self._layout.addWidget(note_label)
+            note_row.addWidget(note_label)
+            note_row.addStretch()
+            self._layout.addLayout(note_row)
+        else:
+            no_notes = QLabel("No notes")
+            no_notes.setStyleSheet(f"""
+                color: {self._vars['on_surface_variant']};
+                font-size: 10px;
+                font-style: italic;
+            """)
+            self._layout.addWidget(no_notes)
 
         self._layout.addStretch()
 
@@ -647,6 +717,97 @@ class TodaySelfieInfoBox(QFrame):
             }}
         """)
         self._layout.addWidget(retake_btn)
+
+        # Delete today's photo button
+        self._delete_btn = QPushButton("Delete")
+        self._delete_btn.setObjectName("DeleteButton")
+        self._delete_btn.setCursor(Qt.PointingHandCursor)
+        self._delete_btn.setFixedHeight(32)
+        
+        delete_icon = self._create_colored_icon(
+            "delete.svg",
+            self._vars.qcolor('error')
+        )
+        self._delete_btn.setIcon(delete_icon)
+        self._delete_btn.setIconSize(QSize(14, 14))
+        
+        self._delete_btn.setStyleSheet(f"""
+            QPushButton#DeleteButton {{
+                background-color: {self._vars['surface_container_high']};
+                color: {self._vars['error']};
+                border: 1px solid {self._vars['error']};
+                border-radius: 16px;
+                padding: 0 12px;
+                font-size: 11px;
+                font-weight: 500;
+            }}
+            QPushButton#DeleteButton:hover {{
+                background-color: {self._vars['error_container']};
+                border: 1px solid {self._vars['error']};
+                color: {self._vars['on_error_container']};
+            }}
+        """)
+        self._delete_btn.clicked.connect(self._on_delete_clicked)
+        self._layout.addWidget(self._delete_btn)
+    
+    def _on_delete_clicked(self):
+        """Handle delete button click: delete photo file and update index."""
+        image_path = self._selfie_card.get_image_path()
+        metadata = self._selfie_card.get_metadata()
+        
+        if not image_path or not image_path.exists():
+            return
+        
+        selfie_id = metadata.get("id") or image_path.stem
+        
+        # Delete the photo file
+        success, error = delete_path(image_path)
+        if not success:
+            # TODO: Show error to user
+            print(f"Failed to delete photo: {error}")
+            return
+        
+        # Record deletion in the index API
+        try:
+            app_paths = get_app_paths("DailySelfie", ensure=True)
+            api = get_api(app_paths)
+            api.record_deletion(selfie_id, reason="user_deleted")
+        except Exception as e:
+            print(f"Failed to record deletion: {e}")
+        
+        # Refresh the selfie card to show empty state
+        self._selfie_card.set_empty_state()
+        
+        # Clear our own content and show placeholder
+        self._clear_and_show_placeholder()
+        
+        # Emit signal for any external listeners
+        self.delete_requested.emit()
+    
+    def _clear_and_show_placeholder(self):
+        """Clear content and show no selfie placeholder."""
+        # Remove all widgets from layout
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+            elif item.layout():
+                # Clear nested layout
+                while item.layout().count():
+                    sub = item.layout().takeAt(0)
+                    if sub.widget():
+                        sub.widget().deleteLater()
+        
+        # Add placeholder
+        placeholder = QLabel("No selfie yet")
+        placeholder.setAlignment(Qt.AlignCenter)
+        placeholder.setStyleSheet(f"""
+            color: {self._vars['on_surface_variant']};
+            font-size: 12px;
+            font-style: italic;
+        """)
+        self._layout.addWidget(placeholder)
+        self._layout.addStretch()
 
 
 class DashboardSurface(QFrame):
