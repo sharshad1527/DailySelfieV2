@@ -39,7 +39,7 @@ class RecentSelfieCarouselPlaceholder(QFrame):
 
         self.setStyleSheet(f"""
             QFrame#RecentSelfieCarousel {{
-                background-color: {vars['surface_container_high']};
+                background-color: {vars['surface_container_low']};
                 border-radius: 12px;
             }}
         """)
@@ -72,13 +72,13 @@ class TodaySelfieCard(QFrame):
 
         self.setStyleSheet(f"""
             QFrame#TodaySelfieCard {{
-                background-color: {self._vars['surface_container_high']};
+                background-color: {self._vars['surface_container_low']};
                 border-radius: 16px;
             }}
         """)
 
         self._layout = QVBoxLayout(self)
-        self._layout.setContentsMargins(8, 8, 8, 8)
+        self._layout.setContentsMargins(2, 2, 2, 2)
         self._layout.setSpacing(0)
 
         self._content_widget = None
@@ -231,19 +231,21 @@ class TodaySelfieCard(QFrame):
         self._metadata = metadata or {}
         self._image_path = image_path
 
-        self._content_widget = QWidget()
-        self._content_widget.setStyleSheet("background-color: transparent;")
-        content_layout = QVBoxLayout(self._content_widget)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(0)
+        # self._content_widget = QWidget()
+        # self._content_widget.setStyleSheet("background-color: transparent;")
+        # content_layout = QVBoxLayout(self._content_widget)
+        # content_layout.setContentsMargins(0, 0, 0, 0)
+        # content_layout.setSpacing(0)
         
         self.selfie_label = QLabel()
         self.selfie_label.setAlignment(Qt.AlignCenter)
         self.selfie_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.selfie_label.setStyleSheet("background-color: transparent;")
         
-        content_layout.addWidget(self.selfie_label)
-        self._layout.addWidget(self._content_widget)
+        # content_layout.addWidget(self.selfie_label)
+        # self._layout.addWidget(self._content_widget)
+
+        self.layout().addWidget(self.selfie_label)
         
         self._update_selfie_image()
     
@@ -271,13 +273,13 @@ class TodaySelfieCard(QFrame):
         painter.setRenderHint(QPainter.Antialiasing)
         
         # Draw border
-        path = QPainterPath()
-        path.addRoundedRect(border_width/2, border_width/2, 
-                           total_size.width() - border_width, 
-                           total_size.height() - border_width, 
-                           radius, radius)
-        painter.setPen(QPen(border_color, border_width))
-        painter.drawPath(path)
+        # path = QPainterPath()
+        # path.addRoundedRect(border_width/2, border_width/2, 
+        #                    total_size.width() - border_width, 
+        #                    total_size.height() - border_width, 
+        #                    radius, radius)
+        # painter.setPen(QPen(border_color, border_width))
+        # painter.drawPath(path)
         
         # Draw image inside
         inner_path = QPainterPath()
@@ -345,7 +347,7 @@ class StreakSummaryWidget(QFrame):
 
         self.setStyleSheet(f"""
             QFrame#StreakSummaryWidget {{
-                background-color: {vars['surface_container_high']};
+                background-color: {vars['surface_container_low']};
                 border-radius: 16px;
             }}
         """)
@@ -375,7 +377,7 @@ class MoodSummaryWidget(QFrame):
 
         self.setStyleSheet(f"""
             QFrame#MoodSummaryWidget {{
-                background-color: {vars['surface_container_high']};
+                background-color: {vars['surface_container_low']};
                 border-radius: 16px;
             }}
         """)
@@ -408,7 +410,7 @@ class TodaySelfieInfoBox(QFrame):
         
         self.setStyleSheet(f"""
             QFrame#TodaySelfieInfoBox {{
-                background-color: {self._vars['surface_container_high']};
+                background-color: {self._vars['surface_container_low']};
                 border-radius: 16px;
             }}
         """)
@@ -465,7 +467,7 @@ class TodaySelfieInfoBox(QFrame):
         metadata = self._selfie_card.get_metadata()
 
         # Status text with checkmark
-        status_label = QLabel("Today's selfie ✓")
+        status_label = QLabel("Today's selfie")
         status_label.setStyleSheet(f"""
             color: {self._vars['primary']};
             font-size: 14px;
@@ -506,10 +508,16 @@ class TodaySelfieInfoBox(QFrame):
             time_row = QHBoxLayout()
             time_row.setSpacing(6)
             time_row.setContentsMargins(0, 0, 0, 0)
+
+            # Create A colored Icon
+            saved_icon = self._create_colored_icon(
+            "save_clock.svg",
+            self._vars.qcolor('on_surface_variant')
+            )
             
-            time_icon = QLabel("🕐")
-            time_icon.setStyleSheet(f"font-size: 12px;")
-            time_icon.setFixedWidth(18)
+            time_icon = QLabel()
+            time_icon.setPixmap(saved_icon.pixmap(24, 24))
+            time_icon.setFixedWidth(24)
             time_row.addWidget(time_icon)
             
             time_label = QLabel(time_str)
@@ -530,8 +538,14 @@ class TodaySelfieInfoBox(QFrame):
             res_row.setSpacing(6)
             res_row.setContentsMargins(0, 0, 0, 0)
             
-            res_icon = QLabel("📐")
-            res_icon.setFixedWidth(16)
+            aspect_ratio_icon = self._create_colored_icon(
+            "aspect_ratio.svg",
+            self._vars.qcolor('on_surface_variant')
+            )
+            
+            res_icon = QLabel()
+            res_icon.setPixmap(aspect_ratio_icon.pixmap(24, 24))
+            res_icon.setFixedWidth(24)
             res_row.addWidget(res_icon)
             
             res_label = QLabel(f"{width} × {height}")
@@ -647,7 +661,7 @@ class DashboardSurface(QFrame):
 
         self.setStyleSheet(f"""
             QFrame#DashboardSurface {{
-                background-color: {vars['surface_container']};
+                background-color: {vars['surface_container_highest']};
                 border-radius: 12px;
             }}
         """)

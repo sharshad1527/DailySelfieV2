@@ -317,7 +317,7 @@ class NavigationRail(QWidget):
         super().__init__()
         
         vars = theme_vars()
-        self._is_collapsed = False # Defaultly Collapsed
+        self._is_collapsed = True # Defaultly Collapsed
         self._buttons = [] # Button List
     
 
