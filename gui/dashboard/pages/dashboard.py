@@ -1,6 +1,7 @@
 # gui/dashboard/pages/dashboard.py
 from datetime import datetime
 from pathlib import Path
+from typing import Tuple
 
 from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtGui import QPixmap, QIcon, QPainter, QMovie
@@ -10,6 +11,7 @@ from gui.theme.theme_vars import theme_vars
 from core.storage import last_image_for_date, delete_path
 from core.paths import get_app_paths
 from core.index_api import get_api
+from core.streak import calculate_streaks
 
 # Asset paths
 _paths = get_app_paths("DailySelfie", ensure=False)
@@ -346,32 +348,161 @@ class TodaySelfieCard(QFrame):
 
 class StreakSummaryWidget(QFrame):
     """
-    Read-only summary showing current and longest streak.
+    Read-only summary showing current and longest streak with status icon.
     """
     def __init__(self):
         super().__init__()
 
-        vars = theme_vars()
+        self._vars = theme_vars()
 
         self.setObjectName("StreakSummaryWidget")
         self.setMinimumHeight(90)
 
         self.setStyleSheet(f"""
             QFrame#StreakSummaryWidget {{
-                background-color: {vars['surface_container_low']};
+                background-color: {self._vars['surface_container_low']};
                 border-radius: 16px;
             }}
         """)
 
         layout = QVBoxLayout(self)
-        title = QLabel("Streak")
-        value = QLabel("0 days")
-
-        layout.addWidget(title)
-        layout.addWidget(value)
-
         layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
+        layout.setSpacing(8)
+
+        # Fetch streak data
+        current, best, has_photo_today = self._get_streaks()
+        
+        # Title row with icon
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        
+        # Status icon based on today's photo status
+        self._status_icon = QLabel()
+        icon_name = "streak.svg" if has_photo_today else "nostreak.svg"
+        colored_icon = self._create_colored_icon(
+            icon_name,
+            self._vars.qcolor('tertiary') if has_photo_today else self._vars.qcolor('on_surface_variant')
+        )
+        self._status_icon.setPixmap(colored_icon.pixmap(20, 20))
+        self._status_icon.setFixedSize(20, 20)
+        title_row.addWidget(self._status_icon)
+        
+        # Title label
+        title = QLabel("Streak")
+        title.setStyleSheet(f"""
+            color: {self._vars['on_surface']};
+            font-size: 14px;
+            font-weight: 600;
+        """)
+        title_row.addWidget(title)
+        title_row.addStretch()
+        layout.addLayout(title_row)
+        
+        # Current streak value (large)
+        current_text = f"{current} day{'s' if current != 1 else ''}"
+        if not has_photo_today and current > 0:
+            current_text += " (at risk)"
+        
+        # Use tertiary color when at risk, primary when safe
+        streak_color = self._vars['tertiary'] if (not has_photo_today and current > 0) else self._vars['primary']
+        
+        current_label = QLabel(current_text)
+        current_label.setStyleSheet(f"""
+            color: {streak_color};
+            font-size: 18px;
+            font-weight: 700;
+        """)
+        layout.addWidget(current_label)
+        
+        # Horizontal separator
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setStyleSheet(f"background-color: {self._vars['outline_variant']};")
+        separator.setFixedHeight(1)
+        layout.addWidget(separator)
+        
+        # Best streak row
+        best_row = QHBoxLayout()
+        best_row.setSpacing(6)
+        
+        best_icon = self._create_colored_icon("timer.svg", self._vars.qcolor('on_surface_variant'))
+        best_icon_label = QLabel()
+        best_icon_label.setPixmap(best_icon.pixmap(16, 16))
+        best_icon_label.setFixedSize(16, 16)
+        best_row.addWidget(best_icon_label)
+        
+        best_label = QLabel(f"Best: {best} days")
+        best_label.setStyleSheet(f"""
+            color: {self._vars['on_surface_variant']};
+            font-size: 13px;
+            font-weight: 500;
+        """)
+        best_row.addWidget(best_label)
+        best_row.addStretch()
+        layout.addLayout(best_row)
+        
+        # Days to beat best streak
+        days_to_beat = best - current + 1
+        if days_to_beat > 0 and current > 0:
+            beat_label = QLabel(f"{days_to_beat} more day{'s' if days_to_beat != 1 else ''} to beat record")
+            beat_label.setStyleSheet(f"""
+                color: {self._vars['on_surface_variant']};
+                font-size: 11px;
+                font-style: italic;
+            """)
+            layout.addWidget(beat_label)
+        elif current > best:
+            # Current streak IS the record
+            record_row = QHBoxLayout()
+            record_row.setSpacing(6)
+            
+            celebration_icon = self._create_colored_icon("celebration.svg", self._vars.qcolor('tertiary'))
+            celebration_label = QLabel()
+            celebration_label.setPixmap(celebration_icon.pixmap(16, 16))
+            celebration_label.setFixedSize(16, 16)
+            record_row.addWidget(celebration_label)
+            
+            record_label = QLabel("New record!")
+            record_label.setStyleSheet(f"""
+                color: {self._vars['tertiary']};
+                font-size: 11px;
+                font-weight: 600;
+            """)
+            record_row.addWidget(record_label)
+            record_row.addStretch()
+            layout.addLayout(record_row)
+    
+    def _create_colored_icon(self, icon_name: str, qcolor):
+        """Loads an SVG and repaints it with the given QColor."""
+        path = ICONS_DIR / icon_name
+        if not path.exists():
+            return QIcon()
+
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            return QIcon()
+
+        colored_pixmap = QPixmap(pixmap.size())
+        colored_pixmap.fill(Qt.transparent)
+
+        painter = QPainter(colored_pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.drawPixmap(0, 0, pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+        painter.fillRect(colored_pixmap.rect(), qcolor)
+        painter.end()
+
+        return QIcon(colored_pixmap)
+    
+    def _get_streaks(self) -> Tuple[int, int, bool]:
+        """Fetch dates from DB and calculate streaks."""
+        try:
+            app_paths = get_app_paths("DailySelfie", ensure=True)
+            api = get_api(app_paths)
+            dates = api._ensure_indexer().get_all_capture_dates()
+            return calculate_streaks(dates)
+        except Exception:
+            return (0, 0, False)
 
 
 class MoodSummaryWidget(QFrame):

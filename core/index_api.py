@@ -51,6 +51,9 @@ class IndexAPI:
     def __init__(self, app_paths):
         self.app_paths = app_paths
         self.data_dir: Path = Path(app_paths.data_dir)
+        # data_dir already includes /data from config (e.g., ~/.local/share/DailySelfie/data)
+        # Store DB and audit files directly in data_dir
+        self.data_dir.mkdir(parents=True, exist_ok=True)
         self.index_db_path: Path = self.data_dir / DB_FILENAME
         self.audit_path: Path = self.data_dir / AUDIT_FILENAME
         self._indexer: Optional[Indexer] = None
@@ -271,6 +274,7 @@ def get_api(app_paths=None) -> IndexAPI:
             app_paths = get_app_paths("DailySelfie", ensure=True)
         _api_singleton = IndexAPI(app_paths)
         _api_singleton.init()
+        _api_singleton.migrate_if_needed()
     return _api_singleton
 
 

@@ -217,6 +217,24 @@ class Indexer:
         row = cur.fetchone()
         return dict(row) if row else None
     
+    def get_all_capture_dates(self) -> List[str]:
+        """
+        Return a sorted list of unique dates (YYYY-MM-DD format) that have captures.
+        Only includes action='capture' (not deleted).
+        
+        Example return: ['2025-12-25', '2025-12-26', '2025-12-28', '2026-01-01']
+        """
+        # substr(ts, 1, 10) extracts first 10 chars: "2025-12-25" from "2025-12-25T10:30:00Z"
+        cur = self._conn.execute(
+            """
+            SELECT DISTINCT substr(ts, 1, 10) as date_str 
+            FROM captures 
+            WHERE action='capture' 
+            ORDER BY date_str ASC
+            """
+        )
+        return [row['date_str'] for row in cur.fetchall()]
+    
     def count_rows(self) -> int:
         cur = self._conn.execute("SELECT COUNT(*) as c FROM captures")
         row = cur.fetchone()
