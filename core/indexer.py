@@ -235,6 +235,39 @@ class Indexer:
         )
         return [row['date_str'] for row in cur.fetchall()]
     
+    def get_moods_since(self, days_back: int) -> List[Dict[str, Any]]:
+        """
+        Return mood data for captures in the last N days.
+        
+        Returns a list of dicts with 'date' and 'mood' for each capture
+        where mood is set (not NULL). Only includes action='capture'.
+        
+        Args:
+            days_back: Number of days to look back (e.g., 7 or 30)
+            
+        Returns:
+            List of {'date': 'YYYY-MM-DD', 'mood': 'Great'|'Good'|'Neutral'|'Bad'|'Awful'}
+        """
+        from datetime import datetime, timedelta
+        
+        # Calculate cutoff date
+        today = datetime.now().date()
+        cutoff = today - timedelta(days=days_back - 1)  # -1 to include today
+        cutoff_str = cutoff.isoformat()  # 'YYYY-MM-DD'
+        
+        cur = self._conn.execute(
+            """
+            SELECT substr(ts, 1, 10) as date, mood
+            FROM captures
+            WHERE action='capture' 
+              AND mood IS NOT NULL 
+              AND substr(ts, 1, 10) >= ?
+            ORDER BY ts DESC
+            """,
+            (cutoff_str,)
+        )
+        return [{'date': row['date'], 'mood': row['mood']} for row in cur.fetchall()]
+    
     def count_rows(self) -> int:
         cur = self._conn.execute("SELECT COUNT(*) as c FROM captures")
         row = cur.fetchone()

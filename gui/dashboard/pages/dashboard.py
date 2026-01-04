@@ -71,6 +71,7 @@ class TodaySelfieCard(QFrame):
         self.setObjectName("TodaySelfieCard")
         self.setMinimumHeight(250)
         self.setMinimumWidth(250)
+        
 
         self.setStyleSheet(f"""
             QFrame#TodaySelfieCard {{
@@ -357,6 +358,8 @@ class StreakSummaryWidget(QFrame):
 
         self.setObjectName("StreakSummaryWidget")
         self.setMinimumHeight(90)
+        self.setMinimumWidth(200)
+        self.setMaximumWidth(280)
 
         self.setStyleSheet(f"""
             QFrame#StreakSummaryWidget {{
@@ -507,33 +510,203 @@ class StreakSummaryWidget(QFrame):
 
 class MoodSummaryWidget(QFrame):
     """
-    Widget showing mood summary.
+    Widget showing mood summary for last 7 days and 30 days.
+    Displays mood distribution with GIF icons and counts.
     """
+    # Order of moods for display (positive to negative)
+    MOOD_ORDER = ["Great", "Good", "Neutral", "Bad", "Awful"]
+    
     def __init__(self):
         super().__init__()
 
-        vars = theme_vars()
+        self._vars = theme_vars()
+        self._movies = []  # Keep references to QMovie objects
 
         self.setObjectName("MoodSummaryWidget")
         self.setMinimumHeight(90)
+        self.setMinimumWidth(200)
+        self.setMaximumWidth(280)
 
         self.setStyleSheet(f"""
             QFrame#MoodSummaryWidget {{
-                background-color: {vars['surface_container_low']};
+                background-color: {self._vars['surface_container_low']};
                 border-radius: 16px;
             }}
         """)
 
         layout = QVBoxLayout(self)
-
-        title = QLabel("Mood (last 30 days)")
-        value = QLabel("—")
-
-        layout.addWidget(title)
-        layout.addWidget(value)
-
         layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
+        layout.setSpacing(8)
+
+        # Fetch mood data
+        moods_7, moods_30, days_available = self._get_mood_data()
+
+        # Title row with icon
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        
+        # Use a mood icon for the title
+        self._title_icon = QLabel()
+        self._title_icon.setFixedSize(20, 20)
+        # Use the first available mood GIF as title icon
+        title_gif_path = str(MOOD_DIR / "smile.gif")
+        self._title_movie = QMovie(title_gif_path)
+        if self._title_movie.isValid():
+            self._title_movie.setScaledSize(QSize(20, 20))
+            self._title_icon.setMovie(self._title_movie)
+            self._title_movie.start()
+        title_row.addWidget(self._title_icon)
+        
+        title = QLabel("Mood Summary")
+        title.setStyleSheet(f"""
+            color: {self._vars['on_surface']};
+            font-size: 14px;
+            font-weight: 600;
+        """)
+        title_row.addWidget(title)
+        title_row.addStretch()
+        layout.addLayout(title_row)
+
+        # 7-day section
+        self._build_mood_section(layout, "Last 7 days", moods_7, 7)
+
+        # Separator
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setStyleSheet(f"background-color: {self._vars['outline_variant']};")
+        separator.setFixedHeight(1)
+        layout.addWidget(separator)
+
+        # 30-day section (or available days)
+        if days_available < 30:
+            section_title = f"Last {days_available} days" if days_available > 0 else "No data"
+        else:
+            section_title = "Last 30 days"
+        self._build_mood_section(layout, section_title, moods_30, days_available)
+
+    def _build_mood_section(self, parent_layout: QVBoxLayout, title: str, mood_counts: dict, total_days: int):
+        """Build a section showing mood distribution."""
+        # Section title
+        section_label = QLabel(title)
+        section_label.setStyleSheet(f"""
+            color: {self._vars['on_surface_variant']};
+            font-size: 11px;
+            font-weight: 500;
+        """)
+        parent_layout.addWidget(section_label)
+
+        if total_days == 0 or not mood_counts:
+            no_data = QLabel("No mood data")
+            no_data.setStyleSheet(f"""
+                color: {self._vars['on_surface_variant']};
+                font-size: 10px;
+                font-style: italic;
+            """)
+            parent_layout.addWidget(no_data)
+            return
+
+        # Mood icons row
+        mood_row = QHBoxLayout()
+        mood_row.setSpacing(4)
+        mood_row.setContentsMargins(0, 4, 0, 0)
+
+        for mood in self.MOOD_ORDER:
+            count = mood_counts.get(mood, 0)
+            mood_container = self._create_mood_item(mood, count)
+            mood_row.addWidget(mood_container)
+
+        mood_row.addStretch()
+        parent_layout.addLayout(mood_row)
+
+        # Most common mood
+        if mood_counts:
+            most_common = max(mood_counts.items(), key=lambda x: x[1])
+            if most_common[1] > 0:
+                common_label = QLabel(f"Most common: {most_common[0]} ({most_common[1]} days)")
+                common_label.setStyleSheet(f"""
+                    color: {self._vars['on_surface_variant']};
+                    font-size: 10px;
+                    font-style: italic;
+                """)
+                parent_layout.addWidget(common_label)
+
+    def _create_mood_item(self, mood: str, count: int) -> QWidget:
+        """Create a single mood item with GIF and count."""
+        container = QWidget()
+        container.setFixedWidth(36)
+        
+        vlayout = QVBoxLayout(container)
+        vlayout.setContentsMargins(0, 0, 0, 0)
+        vlayout.setSpacing(2)
+        vlayout.setAlignment(Qt.AlignCenter)
+
+        # Mood GIF
+        gif_label = QLabel()
+        gif_label.setFixedSize(24, 24)
+        gif_label.setAlignment(Qt.AlignCenter)
+        
+        gif_filename = MOOD_GIF_MAP.get(mood)
+        if gif_filename:
+            gif_path = str(MOOD_DIR / gif_filename)
+            movie = QMovie(gif_path)
+            if movie.isValid():
+                movie.setScaledSize(QSize(20, 20))
+                gif_label.setMovie(movie)
+                movie.start()
+                self._movies.append(movie)  # Keep reference
+        
+        vlayout.addWidget(gif_label, alignment=Qt.AlignCenter)
+
+        # Count label
+        count_label = QLabel(str(count))
+        count_color = self._vars['primary'] if count > 0 else self._vars['on_surface_variant']
+        count_label.setStyleSheet(f"""
+            color: {count_color};
+            font-size: 11px;
+            font-weight: {'600' if count > 0 else '400'};
+        """)
+        count_label.setAlignment(Qt.AlignCenter)
+        vlayout.addWidget(count_label, alignment=Qt.AlignCenter)
+
+        return container
+
+    def _get_mood_data(self) -> tuple:
+        """
+        Fetch mood data from DB.
+        Returns: (7_day_counts: dict, 30_day_counts: dict, days_available: int)
+        """
+        try:
+            app_paths = get_app_paths("DailySelfie", ensure=True)
+            api = get_api(app_paths)
+            indexer = api._ensure_indexer()
+            
+            # Get moods for last 7 days
+            moods_7_raw = indexer.get_moods_since(7)
+            moods_7 = self._count_moods(moods_7_raw)
+            
+            # Get moods for last 30 days
+            moods_30_raw = indexer.get_moods_since(30)
+            moods_30 = self._count_moods(moods_30_raw)
+            
+            # Count unique days available in 30-day data
+            unique_dates = set(m['date'] for m in moods_30_raw)
+            days_available = len(unique_dates)
+            
+            return (moods_7, moods_30, days_available)
+        except Exception:
+            return ({}, {}, 0)
+
+    def _count_moods(self, mood_data: list) -> dict:
+        """
+        Count occurrences of each mood.
+        Returns dict like {'Great': 2, 'Good': 5, ...}
+        """
+        counts = {}
+        for entry in mood_data:
+            mood = entry.get('mood')
+            if mood:
+                counts[mood] = counts.get(mood, 0) + 1
+        return counts
 
 
 class TodaySelfieInfoBox(QFrame):
@@ -962,8 +1135,12 @@ class DashboardSurface(QFrame):
         surface_layout.setContentsMargins(12, 12, 12, 12)
         surface_layout.setSpacing(12)
 
-        # Top Section: TodaySelfieCard + InfoBox + Side Column
-        top_section = QHBoxLayout()
+        # Top Section Container - wrap in a widget to control size policy
+        top_section_container = QWidget()
+        top_section_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        
+        top_section = QHBoxLayout(top_section_container)
+        top_section.setContentsMargins(0, 0, 0, 0)
         top_section.setSpacing(12)
 
         # Selfie Card (image only, fills the card)
@@ -981,16 +1158,18 @@ class DashboardSurface(QFrame):
 
         side_column.addWidget(streak_summary_widget)
         side_column.addWidget(mood_summary_widget)
+        side_column.addStretch()  # Push widgets up, don't let them expand down
 
         # Layout: Selfie (stretch=2) | InfoBox (stretch=0) | SideColumn (stretch=0)
         top_section.addWidget(today_selfie_card, stretch=2)
         top_section.addWidget(info_box, stretch=0)
         top_section.addLayout(side_column, stretch=0)
 
-        surface_layout.addLayout(top_section)
+        surface_layout.addWidget(top_section_container)
         surface_layout.addSpacing(8)
         carousel = RecentSelfieCarouselPlaceholder()
         surface_layout.addWidget(carousel)
+        surface_layout.addStretch()  # Push everything up
 
 
 class DashboardPage(QWidget):
