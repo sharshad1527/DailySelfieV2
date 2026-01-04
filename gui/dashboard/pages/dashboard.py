@@ -71,7 +71,7 @@ class TodaySelfieCard(QFrame):
         self.setObjectName("TodaySelfieCard")
         self.setMinimumHeight(250)
         self.setMinimumWidth(250)
-        
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         self.setStyleSheet(f"""
             QFrame#TodaySelfieCard {{
@@ -245,19 +245,11 @@ class TodaySelfieCard(QFrame):
         self._metadata = metadata or {}
         self._image_path = image_path
 
-        # self._content_widget = QWidget()
-        # self._content_widget.setStyleSheet("background-color: transparent;")
-        # content_layout = QVBoxLayout(self._content_widget)
-        # content_layout.setContentsMargins(0, 0, 0, 0)
-        # content_layout.setSpacing(0)
-        
         self.selfie_label = QLabel()
         self.selfie_label.setAlignment(Qt.AlignCenter)
         self.selfie_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.selfie_label.setStyleSheet("background-color: transparent;")
         
-        # content_layout.addWidget(self.selfie_label)
-        # self._layout.addWidget(self._content_widget)
 
         self.layout().addWidget(self.selfie_label)
         
@@ -285,16 +277,7 @@ class TodaySelfieCard(QFrame):
         
         painter = QPainter(result)
         painter.setRenderHint(QPainter.Antialiasing)
-        
-        # Draw border
-        # path = QPainterPath()
-        # path.addRoundedRect(border_width/2, border_width/2, 
-        #                    total_size.width() - border_width, 
-        #                    total_size.height() - border_width, 
-        #                    radius, radius)
-        # painter.setPen(QPen(border_color, border_width))
-        # painter.drawPath(path)
-        
+                
         # Draw image inside
         inner_path = QPainterPath()
         inner_path.addRoundedRect(border_width, border_width, 
@@ -307,23 +290,35 @@ class TodaySelfieCard(QFrame):
         return result
     
     def _update_selfie_image(self):
-        """Update selfie image to fill the card and emit height signal."""
+        """Update selfie image to fill the card completely."""
         if not self._image_path:
             return
             
         BORDER_RADIUS = 16
         BORDER_WIDTH = 3
+        PADDING = 12  # 10-20px padding as requested
         
-        # Use the card's own width, let height be determined by image aspect ratio
-        card_width = self.width() - 16  # Small padding
+        # Get available space in the card
+        card_width = self.width() - (PADDING * 2)
+        card_height = self.height() - (PADDING * 2)
         
-        if card_width < 100:
-            card_width = 300
+        if card_width < 100 or card_height < 100:
+            return  # Card not properly sized yet
         
         pixmap = QPixmap(str(self._image_path))
         if not pixmap.isNull():
-            # Scale to fit width, let height be natural
-            scaled = pixmap.scaledToWidth(card_width, Qt.SmoothTransformation)
+            # Scale to fill the available space while keeping aspect ratio
+            scaled = pixmap.scaled(
+                card_width, card_height,
+                Qt.KeepAspectRatioByExpanding,
+                Qt.SmoothTransformation
+            )
+            
+            # Crop to exactly fit the card if image is larger
+            if scaled.width() > card_width or scaled.height() > card_height:
+                x_offset = (scaled.width() - card_width) // 2
+                y_offset = (scaled.height() - card_height) // 2
+                scaled = scaled.copy(x_offset, y_offset, card_width, card_height)
             
             # Apply rounded corners and border
             bordered_pixmap = self._create_bordered_rounded_pixmap(
@@ -332,13 +327,10 @@ class TodaySelfieCard(QFrame):
             )
             self.selfie_label.setPixmap(bordered_pixmap)
             
-            # Calculate total height (image + border + card padding)
-            image_height = bordered_pixmap.height() + 16
-            
-            # Set card to fixed height based on image
+            # Emit height signal for info box
+            image_height = bordered_pixmap.height() + PADDING * 2
             if image_height != self._current_image_height:
                 self._current_image_height = image_height
-                self.setFixedHeight(image_height)
                 self.image_resized.emit(image_height)
     
     def resizeEvent(self, event):
@@ -726,7 +718,7 @@ class TodaySelfieInfoBox(QFrame):
         self.setObjectName("TodaySelfieInfoBox")
         self.setMinimumWidth(160)
         self.setMaximumWidth(200)
-        
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         self.setStyleSheet(f"""
             QFrame#TodaySelfieInfoBox {{
                 background-color: {self._vars['surface_container_low']};
@@ -744,8 +736,8 @@ class TodaySelfieInfoBox(QFrame):
         self._selfie_card.image_resized.connect(self._on_image_resized)
     
     def _on_image_resized(self, height: int):
-        """Match height to the selfie card's image height."""
-        self.setFixedHeight(height)
+        """Signal received but we now use flexible sizing."""
+        pass  # Height is now flexible, managed by layout
 
     def _create_colored_icon(self, icon_name: str, qcolor):
         """Loads an SVG and repaints it with the given QColor."""
@@ -1135,9 +1127,9 @@ class DashboardSurface(QFrame):
         surface_layout.setContentsMargins(12, 12, 12, 12)
         surface_layout.setSpacing(12)
 
-        # Top Section Container - wrap in a widget to control size policy
+        # Top Section Container - expanding to fill available space
         top_section_container = QWidget()
-        top_section_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        top_section_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
         top_section = QHBoxLayout(top_section_container)
         top_section.setContentsMargins(0, 0, 0, 0)
@@ -1165,11 +1157,10 @@ class DashboardSurface(QFrame):
         top_section.addWidget(info_box, stretch=0)
         top_section.addLayout(side_column, stretch=0)
 
-        surface_layout.addWidget(top_section_container)
+        surface_layout.addWidget(top_section_container, stretch=1)  # Takes remaining space
         surface_layout.addSpacing(8)
         carousel = RecentSelfieCarouselPlaceholder()
-        surface_layout.addWidget(carousel)
-        surface_layout.addStretch()  # Push everything up
+        surface_layout.addWidget(carousel, stretch=0)  # Fixed height carousel at bottom
 
 
 class DashboardPage(QWidget):
