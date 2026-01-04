@@ -988,7 +988,7 @@ class DashboardSurface(QFrame):
         top_section.addLayout(side_column, stretch=0)
 
         surface_layout.addLayout(top_section)
-        
+        surface_layout.addSpacing(8)
         carousel = RecentSelfieCarouselPlaceholder()
         surface_layout.addWidget(carousel)
 
