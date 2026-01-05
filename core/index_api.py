@@ -246,6 +246,20 @@ class IndexAPI:
         meta = read_meta(self.data_dir, eid)
         return merge_db_and_meta(row, meta)
 
+    def get_recent_photos(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """
+        Get the most recent N photos with merged sidecar metadata.
+        Returns list sorted by timestamp descending (newest first).
+        """
+        idx = self._ensure_indexer()
+        rows = idx.get_recent_captures(limit)
+        merged = []
+        for r in rows:
+            eid = r.get("id")
+            meta = read_meta(self.data_dir, eid)
+            merged.append(merge_db_and_meta(r, meta))
+        return merged
+
 
     def migrate_if_needed(self, jsonl_path: Optional[Path] = None) -> int:
         """

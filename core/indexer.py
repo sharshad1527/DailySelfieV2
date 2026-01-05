@@ -216,6 +216,14 @@ class Indexer:
         )
         row = cur.fetchone()
         return dict(row) if row else None
+
+    def get_recent_captures(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Return the most recent N captures (by timestamp), newest first."""
+        cur = self._conn.execute(
+            "SELECT * FROM captures WHERE action='capture' ORDER BY ts DESC LIMIT ?",
+            (limit,)
+        )
+        return [dict(r) for r in cur.fetchall()]
     
     def get_all_capture_dates(self) -> List[str]:
         """
