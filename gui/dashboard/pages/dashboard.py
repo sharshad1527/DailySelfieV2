@@ -1159,7 +1159,10 @@ class DashboardSurface(QFrame):
 
         surface_layout.addWidget(top_section_container, stretch=1)  # Takes remaining space
         surface_layout.addSpacing(8)
-        carousel = RecentSelfieCarouselPlaceholder()
+
+        from gui.dashboard.widgets.carousel.motion_carousel import MotionCarousel
+        carousel = MotionCarousel()
+        # carousel = RecentSelfieCarouselPlaceholder()
         surface_layout.addWidget(carousel, stretch=0)  # Fixed height carousel at bottom
 
 
