@@ -85,7 +85,9 @@ class GhostOpacitySlider(QWidget):
     def _value_to_y(self):
         track = self._track_rect()
         available_height = track.height()
-        return track.bottom() - int(available_height * self._ratio())
+        # Use top + height for consistent math relative to standard cartesian y-down
+        bottom_edge = track.y() + track.height()
+        return bottom_edge - int(available_height * self._ratio())
 
     # --------------------------------------------------
     # Paint
@@ -220,8 +222,11 @@ class GhostOpacitySlider(QWidget):
         height = track.height()
         if height <= 0: return 
         
-        # Clamp y strictly
-        y = max(track.top(), min(track.bottom(), y))
+        # Clamp y strictly.
+        # Note: track.bottom() is inclusive (y + h - 1), so we use y + h
+        # to allow reaching the full "zero" point.
+        bottom_edge = track.y() + track.height()
+        y = max(track.top(), min(bottom_edge, y))
         
         relative_y = y - track.top()
         ratio = 1.0 - (relative_y / height)
