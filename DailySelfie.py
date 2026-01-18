@@ -19,12 +19,14 @@ from core.config import load_config, apply_config_to_paths
 from core.logging import init_logger, read_jsonl_tail, get_logger
 from core.index_api import get_api as get_index_api
 from core.autostart_manager import set_autostart
+from core.desktop_entry_manager import set_desktop_entry
+
 # Import the checker
 from core.capture import check_if_already_captured
 # ---------------------------------------------------------
 # Sub-Command Handlers
 # ---------------------------------------------------------
-def cmd_show_paths(paths):
+def cmd_show_paths(paths) -> None:
     """Debug: Print all resolved system paths."""
     print("\n[Resolved Application Paths]")
     print(f"  OS Name       : {paths.os_name}")
@@ -150,6 +152,9 @@ def main(argv=None):
     grp_life.add_argument("--uninstall", action="store_true", help="Remove the application and cleanup files")
     grp_life.add_argument("--enable-autostart", action="store_true", help="Enable launching on system login")
     grp_life.add_argument("--disable-autostart", action="store_true", help="Disable launching on system login")
+    grp_life.add_argument("--create-desktop-entry", action="store_true", help="Create Desktop Entry")
+    grp_life.add_argument("--delete-desktop-entry", action="store_true", help="Delete Desktop Entry")
+    
 
     # Group: Runtime Modes
     grp_run = parser.add_argument_group("Runtime Modes")
@@ -217,8 +222,22 @@ def main(argv=None):
         run_uninstall(paths, cfg)
         return 0
 
+
     # -------------------------------------------------
-    # Phase 4: Autostart Toggles
+    # Phase 4: Desktop Entry Toggles
+    # -------------------------------------------------
+
+    if args.create_desktop_entry:
+        set_desktop_entry(True)
+        return 0
+
+    if args.delete_desktop_entry:
+        set_desktop_entry(False)
+        return 0
+
+
+    # -------------------------------------------------
+    # Phase 5: Autostart Toggles
     # -------------------------------------------------
     if args.enable_autostart:
         set_autostart(True)
@@ -229,7 +248,7 @@ def main(argv=None):
         return 0
 
     # -------------------------------------------------
-    # Phase 5: Runtime Initialization
+    # Phase 6: Runtime Initialization
     # -------------------------------------------------
     # Ensure directories exist before running logic
     for p in (paths.config_dir, paths.data_dir, paths.logs_dir, paths.photos_root, paths.venv_dir):
@@ -246,7 +265,7 @@ def main(argv=None):
         # We continue; some features might work without DB
 
     # -------------------------------------------------
-    # Phase 6: Command Execution
+    # Phase 7: Command Execution
     # -------------------------------------------------
     
     cfg = load_config(config_path)
@@ -333,8 +352,27 @@ def main(argv=None):
         # ---- THEN GUI IMPORTS ----
         from PySide6.QtWidgets import QApplication
         from gui.startup.startup_window import StartupWindow
+        from PySide6.QtGui import QIcon
+        import ctypes
+
 
         app = QApplication(sys.argv)
+        app.setApplicationName("Selfie Time")
+        app.setApplicationDisplayName("Selfie Time")
+
+        app.setDesktopFileName("DailySelfie")
+
+        app_ico_path = paths.project_root / "gui" / "assets" / "icons" / "app.svg"
+        if app_ico_path.exists():
+            app.setWindowIcon(QIcon(str(app_ico_path)))
+
+        if paths.os_name == "windows":
+            try:
+                import ctypes
+                myappid = "harshad.dailyselfie.app.v2"
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+            except Exception:
+                pass
         # Start watching config for changes now that we have an event loop
         theme_controller.start_watching()
         
@@ -367,8 +405,28 @@ def main(argv=None):
         # ---- THEN GUI IMPORTS ----
         from PySide6.QtWidgets import QApplication
         from gui.dashboard.dashboard import DashboardWindow
+        from PySide6.QtGui import QIcon
+        import ctypes
+
+
 
         app = QApplication(sys.argv)
+        app.setApplicationName("Dashboard")
+        app.setApplicationDisplayName("Dashboard")
+        app.setDesktopFileName("DailySelfie")
+
+        app_ico_path = paths.project_root / "gui" / "assets" / "icons" / "app.svg"
+        if app_ico_path.exists():
+            app.setWindowIcon(QIcon(str(app_ico_path)))
+
+        if paths.os_name == "windows":
+            try:
+                import ctypes
+                myappid = "harshad.dailyselfie.app.v2"
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+            except Exception:
+                pass
+
         win = DashboardWindow()
         win.show()
         return app.exec()

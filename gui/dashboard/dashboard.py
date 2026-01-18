@@ -1,8 +1,7 @@
 # gui/dashboard/dashboard.py
 import sys
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QPushButton, QButtonGroup, 
-    QStackedWidget, QLabel, QApplication, QHBoxLayout
+    QStackedWidget, QApplication, QHBoxLayout
 )
 from gui.theme.theme_vars import theme_vars 
 

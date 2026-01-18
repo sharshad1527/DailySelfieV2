@@ -71,7 +71,9 @@ def get_app_paths(app_name: str = "DailySelfie", *, ensure: bool = False) -> App
     """
     home = Path.home()
     os_name = platform.system().lower()
-    project_root = Path.cwd().expanduser().resolve()
+    # project_root = Path.cwd().expanduser().resolve()
+    project_root = Path(__file__).resolve().parent.parent
+    # print(project_root)
 
     # Development mode
     dev_mode = _truthy_env("DS_DEV") or _truthy_env("DS_FORCE_LOCAL")

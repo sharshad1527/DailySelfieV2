@@ -30,7 +30,8 @@ def _startup_file(app_name: str) -> Path:
 
 def enable_autostart(paths) -> None:
     """
-    Enable Windows autostart by creating a .cmd file in Startup folder.
+    Enable Windows autostart
+    prefer using the 'bin/dailyselfie.bat' wrapper if it exists.
     """
     if platform.system().lower() != "windows":
         raise RuntimeError("Windows autostart called on non-Windows system")
@@ -38,12 +39,21 @@ def enable_autostart(paths) -> None:
     startup_dir = _startup_dir()
     startup_dir.mkdir(parents=True, exist_ok=True)
 
-    python_exe = paths.venv_dir / "Scripts" / "python.exe"
-    app_entry = paths.project_root / "DailySelfie.py"
+    install_dir = paths.venv_dir.parent
+    wrapper_path = install_dir / "bin" / "dailyselfie.bat"
 
-    cmd_content = f"""@echo off
-"{python_exe}" "{app_entry}" --start-up
-"""
+    if wrapper_path.exists():
+        cmd_content = f"""@echo off
+        "{wrapper_path}" --start-up
+        """
+    else:
+
+        python_exe = paths.venv_dir / "Scripts" / "python.exe"
+        app_entry = paths.project_root / "DailySelfie.py"
+
+        cmd_content = f"""@echo off
+        "{python_exe}" "{app_entry}" --start-up
+        """
 
     startup_file = _startup_file(paths.app_name)
 

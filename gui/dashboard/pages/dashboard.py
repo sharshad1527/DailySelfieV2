@@ -15,7 +15,12 @@ from core.streak import calculate_streaks
 
 # Asset paths
 _paths = get_app_paths("DailySelfie", ensure=False)
+
+# ICONS_DIR = Path(__file__).resolve().parent.parent.parent / "assets" / "icons"
 ICONS_DIR = _paths.project_root / "gui" / "assets" / "icons"
+
+# print(ICONS_DIR)
+
 MOOD_DIR = ICONS_DIR / "mood"
 
 # Mood name to GIF mapping

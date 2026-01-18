@@ -14,10 +14,30 @@ from __future__ import annotations
 import shutil
 import sys
 import os
+import platform
 import time
 from pathlib import Path
 from typing import Dict, Any
 from core.autostart_manager import set_autostart
+
+def _remove_cli_wrapper(install_dir: Path):
+    """
+    Removes The "dailyselfie" command line wrapper.
+    """
+    os_name = platform.system().lower()
+    wrapper_path = None
+
+    if os_name == "windows":
+        wrapper_path = install_dir / "bin" / "dailyselfie.bat"
+    else:
+        wrapper_path = Path.home() / ".local" / "bin" / "dailyselfie"
+
+    if wrapper_path and wrapper_path.exists():
+        try:
+            wrapper_path.unlink()
+            print(f"Removed CLI Command: {wrapper_path}")
+        except Exception as e:
+            print(f"Failed To Remove CLI Command: {e}")
 
 
 def _is_safe_to_delete(path: Path) -> bool:
@@ -139,6 +159,11 @@ def run_uninstall(paths, cfg: Dict[str, Any]):
         set_autostart(False)
     except Exception as e:
         print(f"Note: Failed to clean up autostart: {e}")
+
+    # ---------------------------------------------------------
+    # Remove CLI Wrapper
+    # ---------------------------------------------------------
+    _remove_cli_wrapper(install_dir)
 
     # ---------------------------------------------------------
     # 4. Remove Installation Directory

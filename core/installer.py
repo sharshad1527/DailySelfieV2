@@ -16,14 +16,98 @@ This module:
 from __future__ import annotations
 
 import sys
+import os
+import stat
+import platform
 import copy
 from pathlib import Path
+import platform
 
 from core.venv_helper import ensure_venv
 from core.config import DEFAULT_CONFIG, write_config_bootstrap
 from core.autostart_manager import set_autostart
+from core.desktop_entry_manager import set_desktop_entry
 from core.spinner import Spinner
 
+#----------------------------------------------------------
+# CLI Wrappers (bin/dailyselfie)
+#----------------------------------------------------------
+def create_cli_wrapper(install_dir: Path, venv_dir: Path, project_root: Path) -> None:
+    """
+    Creates Wrapper Script ('dailyselfie' or 'dailyselfie.bat')
+    so user can run the app from terminal.
+    """
+
+    os_name = platform.system().lower()
+
+    # Defining OS Based On Paths
+    if os_name == "windows":
+        # Create Bin Folder Inside The Install Directory
+        bin_dir = install_dir / "bin"
+        wrapper_name = "dailyselfie.bat"
+        python_exe = venv_dir / "Scripts" / "Python.exe"
+    else:
+        # Linux: Use Standard User Bin Directory
+        bin_dir = Path.home() / ".local" / "bin"
+        wrapper_name = "dailyselfie"
+        python_exe = venv_dir / "bin" / "python"
+
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    wrapper_path = bin_dir / wrapper_name
+    main_script = project_root / "DailySelfie.py"
+    print(f"\nCreating command-line tool at {wrapper_path}")
+    print(main_script)
+
+    # Writing Command Line Content
+    try: 
+        if os_name == "windows":
+            #-------WINDOWS.BAT FILE ---------
+            content = f"""@echo off
+            REM DailySelfie CLI Wrapper
+            "{python_exe}" "{main_script}" %*
+            """
+            with open(wrapper_path, "w", encoding="utf-8") as f:
+                f.write(content)
+
+            print(f"[NOTE] To Use 'dailyselfie' from anywhare, add this to your PATH:\n --> {bin_dir}")
+        
+        else:
+            #--------LINUX SHELL SCRIPT--------
+            # We use The Venv Python Directly in the shebang
+            content = f"""#!/home/harshad/.local/share/DailySelfie/venv/bin/python3
+# -*- coding: utf-8 -*-
+import os
+import sys
+PROJECT_ROOT = "{project_root}"
+
+if __name__ == '__main__':
+# 1. Adding Project Root To Path
+    if PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, PROJECT_ROOT)
+
+    # 2. Verify Source Exists
+    if not os.path.exists(PROJECT_ROOT):
+        print(f"Error Source Code Found at:{{PROJECT_ROOT}}")
+        print("Reinstall App Correctly")
+        sys.exit(1)
+
+    try:
+        import DailySelfie
+        sys.exit(DailySelfie.main())
+    except ImportError as e:
+        print(f"Error Importing DailySelfie {{e}}")
+        sys.exit(1)
+            """
+
+            with open(wrapper_path, "w", encoding="utf-8") as f:
+                f.write(content)
+
+                # To Make It Executable (chmod +x)
+                st = os.stat(wrapper_path)
+                os.chmod(wrapper_path, st.st_mode | stat.S_IEXEC)
+                print("Wrapper Created and marked executable")
+    except Exception as e:
+        print(f"Could not create CLI Wrapper {e}")
 
 # ---------------------------------------------------------
 # Helpers
@@ -99,24 +183,25 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
     theme = cfg["theme"]
 
     print("Default installation plan:\n")
-    print(f" Install directory : {inst['install_dir']}")
-    print(f" Venv directory    : {inst['venv_dir']}")
-    print(f" Data directory    : {inst['data_dir']}")
-    print(f" Photos directory  : {inst['photos_root']}")
-    print(f" Logs directory    : {inst['logs_dir']}")
+    print(f" Install directory      : {inst['install_dir']}")
+    print(f" Venv directory         : {inst['venv_dir']}")
+    print(f" Data directory         : {inst['data_dir']}")
+    print(f" Photos directory       : {inst['photos_root']}")
+    print(f" Logs directory         : {inst['logs_dir']}")
     print()
-    print(f" Camera index      : {beh['camera_index']}")
-    print(f" Resolution        : {beh['width']} x {beh['height']}")
-    print(f" Image format      : {beh['image_format']}")
-    print(f" JPEG quality      : {beh['quality']}")
-    print(f" Timer duration    : {beh.get('timer_duration', 0)}s")
+    print(f" Camera index           : {beh['camera_index']}")
+    print(f" Resolution             : {beh['width']} x {beh['height']}")
+    print(f" Image format           : {beh['image_format']}")
+    print(f" JPEG quality           : {beh['quality']}")
+    print(f" Timer duration         : {beh.get('timer_duration', 0)}s")
     print()
-    print(f" Autostart         : {inst['autostart']}")
+    print(f" Create Desktop Entry   : {inst['create_desktop_entry']}")
+    print(f" Autostart              : {inst['autostart']}")
     print()
     print(" Theme settings:")
-    print(f"  Theme name       : {theme['name']}")
-    print(f"  Color mode       : {theme['mode']}")
-    print(f"  Contrast level   : {theme['contrast']}")
+    print(f"  Theme name            : {theme['name']}")
+    print(f"  Color mode            : {theme['mode']}")
+    print(f"  Contrast level        : {theme['contrast']}")
     print()
 
     if _prompt_bool("Do you want to change any of these settings?", False):
@@ -131,6 +216,7 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
         beh["height"] = _prompt_int("Camera height (0 = default)", beh["height"], allow_empty=True)
         beh["quality"] = _prompt_int("JPEG quality (1-100)", beh["quality"])
 
+        inst["create_desktop_entry"] = _prompt_bool("Create DailySelfie Desktop Entry?", True)
         inst["autostart"] = _prompt_bool("Start DailySelfie automatically on login?", False)
 
         print("\nTheme preferences:\n")
@@ -148,18 +234,19 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
         )
 
     print("\nFinal installation plan:\n")
-    print(f" Install directory : {inst['install_dir']}")
-    print(f" Venv directory    : {inst['venv_dir']}")
-    print(f" Data directory    : {inst['data_dir']}")
-    print(f" Photos directory  : {inst['photos_root']}")
-    print(f" Logs directory    : {inst['logs_dir']}")
+    print(f" Install directory      : {inst['install_dir']}")
+    print(f" Venv directory         : {inst['venv_dir']}")
+    print(f" Data directory         : {inst['data_dir']}")
+    print(f" Photos directory       : {inst['photos_root']}")
+    print(f" Logs directory         : {inst['logs_dir']}")
     print()
-    print(f" Autostart         : {inst['autostart']}")
+    print(f" Create Desktop Entry   : {inst['create_desktop_entry']}")
+    print(f" Autostart              : {inst['autostart']}")
     print()
     print(" Theme settings:")
-    print(f"  Theme name       : {theme['name']}")
-    print(f"  Color mode       : {theme['mode']}")
-    print(f"  Contrast level   : {theme['contrast']}")
+    print(f"  Theme name            : {theme['name']}")
+    print(f"  Color mode            : {theme['mode']}")
+    print(f"  Contrast level        : {theme['contrast']}")
     print()
 
     if not _prompt_bool("Proceed with installation?", True):
@@ -219,6 +306,25 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
     print(f"Virtual environment ready: {py}")
 
     # -------------------------------------------------
+    # Create CLI WRAPPER
+    # -------------------------------------------------
+    project_root = Path(__file__).absolute().parent.parent
+    print(project_root)
+    create_cli_wrapper(install_dir, Path(inst["venv_dir"]), project_root)
+
+    # -------------------------------------------------
+    # Desktop entry (single call)
+    # -------------------------------------------------
+    if inst.get("create_desktop_entry"):
+        print("\nCreating Desktop Entry...")
+        try:
+            set_desktop_entry(True)
+        except Exception as e:
+            print(f"Failed To Create Entry: {e}")
+    else:
+        print("\nDesktop Entry disabled by user choice.")
+
+    # -------------------------------------------------
     # Autostart (single call)
     # -------------------------------------------------
     if inst.get("autostart"):
@@ -235,7 +341,7 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
     # -------------------------------------------------
     print("\nInstallation complete.")
     print("You can now run:")
-    print(f"{py} DailySelfie.py --start-up\n")
+    print(f"dailyselfie\n")
 
 
 # ---------------------------------------------------------
@@ -247,3 +353,6 @@ if __name__ == "__main__":
     paths = get_app_paths("DailySelfie", ensure=True)
     req = Path("requirements.txt") if Path("requirements.txt").exists() else None
     run_install(paths.config_dir, requirements_path=req)
+
+
+    

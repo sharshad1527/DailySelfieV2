@@ -254,7 +254,8 @@ class StartupWindow(BaseFramelessWindow):
         moods_lo = QHBoxLayout()
         moods_lo.setSpacing(12)
 
-        ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "icons" / "mood"
+        mood_path = get_app_paths("DailySelfie", ensure=False)
+        ASSETS_DIR = mood_path.project_root / "gui" / "assets" / "icons" /"mood"
         mood_data = [
             ("cool.gif", "Great"), 
             ("smile.gif", "Good"), 

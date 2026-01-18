@@ -15,12 +15,15 @@ from pathlib import Path
 DESKTOP_TEMPLATE = """[Desktop Entry]
 Type=Application
 Version=1.0
-Name=DailySelfie
+Name=Daily Selfie
 Comment=Daily Selfie Capture App
 Exec= sh -c "sleep 30 && {exec_cmd}"
 Icon=camera
 Terminal=false
+StartupWMClass=DailySelfie
 X-GNOME-Autostart-enabled=true
+StartupNotify=true
+
 """
 
 
@@ -34,7 +37,7 @@ def _desktop_file(app_name: str) -> Path:
 
 def enable_autostart(paths) -> None:
     """
-    Enable autostart on Linux using .desktop file.
+    Enable autostart using the 'dailyselfie' CLI Wrapper if avaliable
     """
     if platform.system().lower() != "linux":
         raise RuntimeError("Linux autostart called on non-Linux system")
@@ -42,10 +45,19 @@ def enable_autostart(paths) -> None:
     autostart_dir = _autostart_dir()
     autostart_dir.mkdir(parents=True, exist_ok=True)
 
-    python_exe = paths.venv_dir / "bin" / "python"
-    app_entry = paths.project_root / "DailySelfie.py"
+    wrapper_path = Path.home() / ".local" / "bin" / "dailyselfie"
 
-    exec_cmd = f'"{python_exe}" "{app_entry}" --start-up'
+    if wrapper_path.exists():
+        # WE Add Small Sleep To Ensure UI loads after login
+        exec_cmd = f'sh -c "sleep 10 && {wrapper_path} --start-up"'
+
+    else:
+        # Fallback: Direct Python Call
+
+        python_exe = paths.venv_dir / "bin" / "python"
+        app_entry = paths.project_root / "DailySelfie.py"
+
+        exec_cmd = f'sh -c"sleep 10 && {python_exe}" "{app_entry}" --start-up'
 
     desktop_content = DESKTOP_TEMPLATE.format(exec_cmd=exec_cmd)
 

@@ -1,26 +1,26 @@
 # gui/dashboard/navigation_rail.py
 from enum import Enum
-from PySide6.QtWidgets import QPushButton
 from PySide6.QtWidgets import QLabel
 from pathlib import Path
 from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QIcon, QPixmap, QPainter
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QButtonGroup, QToolButton,
-    QSizePolicy
+    QWidget, QVBoxLayout, QHBoxLayout, QSizePolicy
     )
 
 from gui.theme.theme_vars import theme_vars
 from core.paths import get_app_paths
 
 paths = get_app_paths("DailySelfie", ensure=False)
-ICONS_DIR = paths.project_root / "gui" / "assets" / "icons"
+# ICONS_DIR = Path(__file__).resolve().parent.parent / "assets" / "icons"
+ICONS_DIR = paths.project_root / "gui" /"assets" / "icons"
+# print(ICONS_DIR)
 
 vars = theme_vars()
 
 # Icons
 ico_menu = "menu.svg"
-ico_menu_open = "menu_open.svg"
+ico_menu_open = "menu_open.svg" 
 
 ico_selfie = "selfie.svg"
 ico_selfie_filled = "selfie_filled.svg"
@@ -304,6 +304,7 @@ class NavButton(QWidget):
             else:
                 self.txt_label.show()
                 self._apply_layout_mode()
+    
         
 
 

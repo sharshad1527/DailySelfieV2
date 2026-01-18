@@ -1,9 +1,8 @@
 # gui/dashboard/window_con.py
-from PySide6.QtCore import Qt, QPoint, QSize
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QApplication, QLabel
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
 )
-from PySide6.QtGui import QCursor, QColor
 
 from gui.theme.theme_vars import theme_vars 
 
@@ -93,6 +92,8 @@ class ResizeGrip(QWidget):
 class DashboardShell(QMainWindow):
     def __init__(self, width=1100, height=620):
         super().__init__()
+        self.setWindowTitle("Daily Selfie")
+        
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window) # Added Qt.Window for better OS handling
         self.setAttribute(Qt.WA_TranslucentBackground)
 

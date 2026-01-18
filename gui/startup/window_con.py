@@ -42,6 +42,8 @@ class BaseFramelessWindow(QMainWindow):
     def __init__(self, width=900, height=520):
         super().__init__()
 
+        self.setWindowTitle("Daily Selfie")
+
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.resize(width, height)
