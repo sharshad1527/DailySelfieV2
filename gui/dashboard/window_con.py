@@ -204,7 +204,7 @@ class DashboardShell(QMainWindow):
         btn_min = QPushButton("─")
         btn_min.setFixedSize(32, 32)
         btn_min.setStyleSheet(btn_style)
-        btn_min.clicked.connect(self.showMinimized)
+        btn_min.clicked.connect(self._minimize_window)
 
         self.btn_max = QPushButton("☐")
         self.btn_max.setFixedSize(32, 32)
@@ -238,6 +238,24 @@ class DashboardShell(QMainWindow):
             self.showNormal()
             self._container.setStyleSheet(self._container.styleSheet().replace("border-radius: 0px;", "border-radius: 12px;"))
         else:
+            self.showMaximized()
+            self._container.setStyleSheet(self._container.styleSheet().replace("border-radius: 12px;", "border-radius: 0px;"))
+
+    def _minimize_window(self):
+        # Store pre-minimize state so we can restore properly
+        self._was_maximized_before_minimize = self.isMaximized()
+        
+        # On Windows, frameless windows that are maximized don't minimize properly
+        # We need to go through showNormal() first, then minimize
+        if self.isMaximized():
+            self.showNormal()
+        self.showMinimized()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Restore maximized state if we were maximized before minimizing
+        if hasattr(self, '_was_maximized_before_minimize') and self._was_maximized_before_minimize:
+            self._was_maximized_before_minimize = False
             self.showMaximized()
             self._container.setStyleSheet(self._container.styleSheet().replace("border-radius: 12px;", "border-radius: 0px;"))
 
