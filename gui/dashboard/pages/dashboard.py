@@ -65,6 +65,7 @@ class TodaySelfieCard(QFrame):
     Emits image_resized signal with the displayed image height.
     """
     image_resized = Signal(int)  # Emits the displayed image height
+    takeSelfieRequested = Signal()  # Emitted when "Take selfie" button is clicked
     
     def __init__(self):
         super().__init__()
@@ -72,6 +73,7 @@ class TodaySelfieCard(QFrame):
         self._image_path = None
         self._metadata = {}
         self._current_image_height = 0
+        self.take_selfie_btn = None  # Initialize to None
 
         self.setObjectName("TodaySelfieCard")
         self.setMinimumHeight(250)
@@ -177,6 +179,8 @@ class TodaySelfieCard(QFrame):
                 opacity: 0.85;
             }}
         """)
+        # Connect button to emit the signal
+        self.take_selfie_btn.clicked.connect(self.takeSelfieRequested.emit)
         content_layout.addWidget(self.take_selfie_btn, alignment=Qt.AlignCenter)
 
         # Secondary text: "Capture your day"
@@ -712,6 +716,7 @@ class TodaySelfieInfoBox(QFrame):
     Placed between selfie card and side column.
     """
     delete_requested = Signal()  # Emitted when user deletes today's photo
+    retakeRequested = Signal()  # Emitted when user clicks retake button
     
     def __init__(self, selfie_card: TodaySelfieCard):
         super().__init__()
@@ -1017,6 +1022,7 @@ class TodaySelfieInfoBox(QFrame):
                 color: {self._vars['on_surface']};
             }}
         """)
+        retake_btn.clicked.connect(self.retakeRequested.emit)
         self._layout.addWidget(retake_btn)
 
         # Delete today's photo button
@@ -1115,6 +1121,13 @@ class DashboardSurface(QFrame):
     """
     Primary dashboard surface containing today's selfie card and summary widgets.
     """
+    # Signal emitted when "Take today's selfie" button is clicked
+    takeSelfieRequested = Signal()
+    # Signal emitted when "Retake" button is clicked
+    retakeRequested = Signal()
+    # Signal emitted when photo is deleted
+    photoDeleted = Signal()
+    
     def __init__(self):
         super().__init__()
         vars = theme_vars()
@@ -1142,9 +1155,16 @@ class DashboardSurface(QFrame):
 
         # Selfie Card (image only, fills the card)
         today_selfie_card = TodaySelfieCard()
+        
+        # Connect the card's signal to our signal (forwards the request)
+        today_selfie_card.takeSelfieRequested.connect(self.takeSelfieRequested.emit)
 
         # Info Box (between selfie and side column)
         info_box = TodaySelfieInfoBox(today_selfie_card)
+        # Forward retake request
+        info_box.retakeRequested.connect(self.retakeRequested.emit)
+        # Forward delete request
+        info_box.delete_requested.connect(self.photoDeleted.emit)
 
         # Side Column: Streak + Mood
         side_column = QVBoxLayout()
@@ -1166,26 +1186,51 @@ class DashboardSurface(QFrame):
         surface_layout.addSpacing(8)
 
         from gui.dashboard.widgets.carousel.motion_carousel import MotionCarousel
-        carousel = MotionCarousel()
+        self._carousel = MotionCarousel()
         # carousel = RecentSelfieCarouselPlaceholder()
-        surface_layout.addWidget(carousel, stretch=0)  # Fixed height carousel at bottom
+        surface_layout.addWidget(self._carousel, stretch=0)  # Fixed height carousel at bottom
 
 
 class DashboardPage(QWidget):
+    # Signal emitted when "Take today's selfie" button is clicked
+    takeSelfieRequested = Signal()
+    # Signal emitted when "Retake" button is clicked
+    retakeRequested = Signal()
+    # Signal emitted when photo is deleted
+    photoDeleted = Signal()
+    
     def __init__(self):
         super().__init__()
         vars = theme_vars()
         
+        self._root_layout = QVBoxLayout()
+        self._root_layout.setContentsMargins(12, 12, 12, 12)
+        self._root_layout.setSpacing(12)
         
-                
+        self._surface = None
+        self._build_surface()
 
-
-        root_layout = QVBoxLayout()
-        root_layout.setContentsMargins(12, 12, 12, 12)
-        root_layout.setSpacing(12)
-        surface = DashboardSurface()
-        root_layout.addWidget(surface)
-
-        self.setLayout(root_layout)
-
+        self.setLayout(self._root_layout)
+    
+    def _build_surface(self):
+        """Build or rebuild the dashboard surface."""
+        # Remove old surface if exists
+        if self._surface:
+            self._root_layout.removeWidget(self._surface)
+            self._surface.deleteLater()
+        
+        # Create new surface
+        self._surface = DashboardSurface()
+        # Forward the takeSelfieRequested signal
+        self._surface.takeSelfieRequested.connect(self.takeSelfieRequested.emit)
+        # Forward the retakeRequested signal
+        self._surface.retakeRequested.connect(self.retakeRequested.emit)
+        # Forward the photoDeleted signal
+        self._surface.photoDeleted.connect(self.photoDeleted.emit)
+        self._root_layout.addWidget(self._surface)
+    
+    def refresh(self):
+        """Refresh the dashboard to show updated data (e.g., after a new photo is saved)."""
+        print("Refreshing dashboard...")
+        self._build_surface()
 

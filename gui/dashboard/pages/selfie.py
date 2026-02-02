@@ -1,15 +1,15 @@
-# gui/dashboard/pages/dashboard.py
+# gui/dashboard/pages/selfie.py
 import logging
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QByteArray, QBuffer, QIODevice, QSize, QTimer, QEvent
+from PySide6.QtCore import Qt, QByteArray, QBuffer, QIODevice, QSize, QTimer, QEvent, Signal
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, 
     QPushButton, QTextEdit, QButtonGroup, QGridLayout,
-    QGraphicsOpacityEffect
+    QGraphicsOpacityEffect, QFrame, QSizePolicy
 )
-from PySide6.QtGui import QPixmap, QImage, QPainter, QPainterPath, QFont
+from PySide6.QtGui import QPixmap, QImage, QPainter, QPainterPath, QFont, QIcon, QMovie
 
 # Core
 from core.capture import commit_capture_from_bytes
@@ -17,6 +17,7 @@ from core.index_api import get_api
 from core.logging import get_logger
 from core.config import ensure_config, apply_config_to_paths, write_config
 from core.paths import get_app_paths
+from core.storage import delete_last_image_for_date
 
 # GUI Components
 from gui.startup.window_con import BaseFramelessWindow
@@ -32,11 +33,22 @@ from gui.theme.theme_vars import theme_vars
 
 
 
+# Mood name to GIF mapping
+MOOD_GIF_MAP = {
+    "Great": "cool.gif",
+    "Good": "smile.gif",
+    "Neutral": "neutral.gif",
+    "Bad": "sad.gif",
+    "Awful": "sosad.gif",
+}
+
 class SelfiePage(QWidget):
     """
     Main startup window for Daily Selfie.
     Handles camera preview, ghost overlay, countdown, and capture.
     """
+    # Signal emitted when a photo is saved successfully (for dashboard refresh)
+    photoSaved = Signal()
     def __init__(self, allow_retake=False):
         super().__init__()
 
@@ -53,6 +65,10 @@ class SelfiePage(QWidget):
         self._raw_ghost_image = None
         self._preview_thread = None
         self._countdown_remaining = 0
+        self._photo_saved = False  # True when showing a saved photo
+        self._review_mode = False  # True when in freeze/review mode (before saving)
+        self._saved_metadata = {}  # Metadata of the saved photo
+        self._metadata_panel = None  # Reference to metadata panel widget
 
         initial_timer = self.config.get("behavior", {}).get("timer_duration", 0)
         self._setup_countdown_timer()
@@ -329,7 +345,11 @@ class SelfiePage(QWidget):
         right_layout.addWidget(self.label_note)
         right_layout.addWidget(self.note_edit)
         
-        right_layout.addSpacing(80) 
+        # Spacer before toast - can be resized when metadata is shown
+        from PySide6.QtWidgets import QSpacerItem
+        self._toast_spacer = QSpacerItem(0, 80, QSizePolicy.Minimum, QSizePolicy.Fixed)
+        right_layout.addItem(self._toast_spacer)
+        
         right_layout.addWidget(self.toast_msg, alignment=Qt.AlignCenter)
         right_layout.addSpacing(8)
         right_layout.addWidget(self.shutter_bar, alignment=Qt.AlignCenter)
@@ -450,9 +470,114 @@ class SelfiePage(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        self._start_preview()
+        
+        # Check if today's photo already exists
+        today_photo = self._check_today_photo_exists()
+        
+        if today_photo:
+            # Today's photo exists - show it with metadata
+            if not self._photo_saved:
+                self._load_and_show_today_photo(today_photo)
+        else:
+            # No photo today - reset any stale review state and start camera
+            if self._review_mode and not self._photo_saved:
+                # User was in review mode but switched tabs without saving
+                # Reset to camera mode
+                self._reset_to_camera_mode()
+            elif not self._photo_saved:
+                self._start_preview()
+                if self._raw_ghost_image:
+                    self._update_ghost_visuals()
+
+    def _check_today_photo_exists(self):
+        """Check if today's photo exists. Returns path if exists, None otherwise."""
+        try:
+            from datetime import datetime
+            from core.storage import last_image_for_date
+            photos_root = Path(self.paths.photos_root)  # Use correct photos_root
+            today = datetime.now()
+            today_path = last_image_for_date(photos_root, today)
+            if today_path and today_path.exists():
+                return today_path
+        except Exception as e:
+            print(f"Error checking today's photo: {e}")
+        return None
+    
+    def _load_and_show_today_photo(self, photo_path):
+        """Load and display today's existing photo."""
+        try:
+            # Load the image
+            img = QImage(str(photo_path))
+            if img.isNull():
+                return
+            
+            self._current_qimage = img
+            
+            # Get metadata from index
+            selfie_id = photo_path.stem
+            try:
+                metadata = self.index_api.get_item(selfie_id) or {}
+            except Exception:
+                metadata = {}
+            
+            self._saved_metadata = {
+                "mood": metadata.get("mood"),
+                "notes": metadata.get("notes"),
+                "width": metadata.get("width") or img.width(),
+                "height": metadata.get("height") or img.height(),
+                "path": str(photo_path),
+                "ts": metadata.get("ts"),
+            }
+            
+            # Display the photo
+            pix = self._process_image_for_display(img)
+            if pix:
+                self.preview_lbl.setPixmap(pix)
+            
+            self._set_photo_taken_state()
+            
+        except Exception as e:
+            print(f"Error loading today's photo: {e}")
+            self._start_preview()
+    
+    def _reset_to_camera_mode(self):
+        """Reset from review mode back to camera mode."""
+        self._review_mode = False
+        self.shutter_bar.setReviewMode(False)
+        self.ghost_slider.setEnabled(True)
+        self.ghost_slider.setStyleSheet("")
         if self._raw_ghost_image:
+            self.ghost_lbl.show()
             self._update_ghost_visuals()
+        self._current_qimage = None
+        self._start_preview()
+    
+    def activate(self):
+        """
+        Public method to activate/refresh the selfie page.
+        Called when programmatically switching to this tab.
+        Runs the same logic as showEvent.
+        """
+        # Check if today's photo already exists
+        today_photo = self._check_today_photo_exists()
+        
+        if today_photo:
+            # Today's photo exists - show it with metadata
+            if not self._photo_saved:
+                self._load_and_show_today_photo(today_photo)
+        else:
+            # No photo today - reset any stale review state and start camera
+            if self._review_mode and not self._photo_saved:
+                self._reset_to_camera_mode()
+            elif not self._photo_saved:
+                self._start_preview()
+                if self._raw_ghost_image:
+                    self._update_ghost_visuals()
+
+    def hideEvent(self, event):
+        """Stop camera when tab is switched away."""
+        self._stop_preview()
+        super().hideEvent(event)
 
     def closeEvent(self, event):
         try:
@@ -530,11 +655,62 @@ class SelfiePage(QWidget):
         self.flash_overlay.hide()
         self._stop_preview()
         self.ghost_lbl.hide()
+        self._review_mode = True  # Track that we're in review mode
         self.shutter_bar.setReviewMode(True)
         self.ghost_slider.setEnabled(False) 
         self.ghost_slider.setStyleSheet("opacity: 0.3;")
 
     def _on_retake(self):
+        # Delete existing photo for today first
+        from datetime import datetime
+        try:
+            photos_root = Path(self.paths.photos_root)  # Use correct photos_root from paths
+            today = datetime.now()
+            success, error, deleted_path = delete_last_image_for_date(photos_root, today)
+            if success and deleted_path:
+                print(f"Deleted existing photo: {deleted_path}")
+                # Also remove from index
+                try:
+                    selfie_id = deleted_path.stem
+                    self.index_api.record_deletion(selfie_id, reason="retake")
+                except Exception as e:
+                    print(f"Error removing from index: {e}")
+            elif error and error != 'no_image':
+                print(f"Error deleting photo: {error}")
+        except Exception as e:
+            print(f"Error during photo deletion: {e}")
+        
+        # Reset photo-saved state
+        self._photo_saved = False
+        self._review_mode = False
+        self._saved_metadata = {}
+        
+        # Remove metadata panel if it exists
+        if self._metadata_panel:
+            self._metadata_panel.deleteLater()
+            self._metadata_panel = None
+        
+        # Reset mood selection
+        checked_btn = self.mood_group.checkedButton()
+        if checked_btn:
+            self.mood_group.setExclusive(False)
+            checked_btn.setChecked(False)
+            self.mood_group.setExclusive(True)
+        
+        # Reset note text
+        self.note_edit.clear()
+        
+        # Restore toast spacer height
+        from PySide6.QtWidgets import QSizePolicy
+        if hasattr(self, '_toast_spacer'):
+            self._toast_spacer.changeSize(0, 80, QSizePolicy.Minimum, QSizePolicy.Fixed)
+            if self.layout() and self.layout().count() > 2:
+                right_widget = self.layout().itemAt(2).widget()
+                if right_widget and right_widget.layout():
+                    right_widget.layout().invalidate()
+        
+        # Show shutter bar again
+        self.shutter_bar.show()
         self.shutter_bar.setReviewMode(False)
         self.ghost_slider.setEnabled(True)
         self.ghost_slider.setStyleSheet("")
@@ -577,6 +753,274 @@ class SelfiePage(QWidget):
 
         if result["success"]:
             print(f"Saved to: {result['path']}")
-            self.close()
+            # Instead of closing, show the photo-taken state with metadata
+            self._saved_metadata = {
+                "mood": selected_mood,
+                "notes": selected_note,
+                "width": self._current_qimage.width(),
+                "height": self._current_qimage.height(),
+                "path": result.get("path"),
+                "ts": result.get("ts"),  # Capture timestamp if available
+            }
+            self._set_photo_taken_state()
+            # Emit signal for dashboard refresh
+            self.photoSaved.emit()
         else:
             print(f"Save Failed: {result['error']}")
+
+    def _set_photo_taken_state(self):
+        """Display saved photo with metadata panel and retake button."""
+        self._photo_saved = True
+        
+        # Hide shutter bar and show metadata panel
+        self.shutter_bar.hide()
+        
+        # Reduce toast spacer height to move toast up
+        from PySide6.QtWidgets import QSizePolicy
+        self._toast_spacer.changeSize(0, 12, QSizePolicy.Minimum, QSizePolicy.Fixed)
+        
+        # Build and show metadata panel in the right panel area
+        self._metadata_panel = self._build_metadata_panel()
+        
+        # Find the right panel and add metadata panel
+        # The right panel is at index 2 in the root layout
+        root_layout = self.layout()
+        if root_layout and root_layout.count() > 2:
+            right_widget = root_layout.itemAt(2).widget()
+            if right_widget:
+                right_layout = right_widget.layout()
+                if right_layout:
+                    # Insert metadata panel before the stretch
+                    right_layout.insertWidget(right_layout.count() - 1, self._metadata_panel)
+                    # Force layout update
+                    right_layout.invalidate()
+
+    def _build_metadata_panel(self):
+        """Build the metadata panel showing saved photo info."""
+        v = theme_vars()
+        
+        panel = QFrame()
+        panel.setObjectName("MetadataPanel")
+        panel.setStyleSheet(f"""
+            QFrame#MetadataPanel {{
+                background-color: {v['surface_container_low']};
+                border-radius: 16px;
+            }}
+        """)
+        
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(6)  # Reduced spacing
+        
+        # Status text
+        status_label = QLabel("✓ Photo saved!")
+        status_label.setStyleSheet(f"""
+            color: {v['primary']};
+            font-size: 14px;
+            font-weight: 600;
+        """)
+        layout.addWidget(status_label)
+        
+        # Time taken
+        from datetime import datetime
+        time_str = datetime.now().strftime("%I:%M %p")
+        time_row = QHBoxLayout()
+        time_row.setSpacing(6)
+        
+        saved_icon = self._create_colored_icon("save_clock.svg", v.qcolor('on_surface_variant'))
+        time_icon = QLabel()
+        time_icon.setPixmap(saved_icon.pixmap(20, 20))
+        time_icon.setFixedWidth(20)
+        time_row.addWidget(time_icon)
+        
+        time_label = QLabel(time_str)
+        time_label.setStyleSheet(f"""
+            color: {v['on_surface']};
+            font-size: 11px;
+            font-weight: 500;
+        """)
+        time_row.addWidget(time_label)
+        time_row.addStretch()
+        layout.addLayout(time_row)
+        
+        # Resolution
+        width = self._saved_metadata.get("width")
+        height = self._saved_metadata.get("height")
+        if width and height:
+            res_row = QHBoxLayout()
+            res_row.setSpacing(6)
+            
+            aspect_icon = self._create_colored_icon("aspect_ratio.svg", v.qcolor('on_surface_variant'))
+            res_icon = QLabel()
+            res_icon.setPixmap(aspect_icon.pixmap(20, 20))
+            res_icon.setFixedWidth(20)
+            res_row.addWidget(res_icon)
+            
+            res_label = QLabel(f"{width} × {height}")
+            res_label.setStyleSheet(f"""
+                color: {v['on_surface']};
+                font-size: 11px;
+            """)
+            res_row.addWidget(res_label)
+            res_row.addStretch()
+            layout.addLayout(res_row)
+        
+        # Separator before mood
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setStyleSheet(f"background-color: {v['outline_variant']};")
+        separator.setFixedHeight(1)
+        layout.addWidget(separator)
+        
+        # Mood section
+        mood_section_label = QLabel("Mood")
+        mood_section_label.setStyleSheet(f"""
+            color: {v['on_surface_variant']};
+            font-size: 10px;
+            font-weight: 500;
+        """)
+        layout.addWidget(mood_section_label)
+        
+        mood_value = self._saved_metadata.get("mood")
+        if mood_value and mood_value in MOOD_GIF_MAP:
+            mood_row = QHBoxLayout()
+            mood_row.setSpacing(8)
+            
+            mood_gif_label = QLabel()
+            mood_gif_label.setFixedSize(32, 32)
+            mood_gif_label.setAlignment(Qt.AlignCenter)
+            
+            mood_path = get_app_paths("DailySelfie", ensure=False)
+            gif_path = str(mood_path.project_root / "gui" / "assets" / "icons" / "mood" / MOOD_GIF_MAP[mood_value])
+            self._mood_movie = QMovie(gif_path)
+            if self._mood_movie.isValid():
+                self._mood_movie.setScaledSize(QSize(22, 22))
+                mood_gif_label.setMovie(self._mood_movie)
+                self._mood_movie.start()
+            
+            mood_gif_label.setStyleSheet(f"""
+                background-color: {v['surface_container_low']};
+                border: 2px solid {v['outline_variant']};
+                border-radius: 8px;
+            """)
+            mood_row.addWidget(mood_gif_label)
+            
+            mood_text = QLabel(mood_value)
+            mood_text.setStyleSheet(f"""
+                color: {v['on_surface']};
+                font-size: 11px;
+                font-weight: 500;
+            """)
+            mood_row.addWidget(mood_text)
+            mood_row.addStretch()
+            layout.addLayout(mood_row)
+        else:
+            no_mood = QLabel("No mood selected")
+            no_mood.setStyleSheet(f"""
+                color: {v['on_surface_variant']};
+                font-size: 10px;
+                font-style: italic;
+            """)
+            layout.addWidget(no_mood)
+        
+        # Separator before notes
+        separator2 = QFrame()
+        separator2.setFrameShape(QFrame.HLine)
+        separator2.setStyleSheet(f"background-color: {v['outline_variant']};")
+        separator2.setFixedHeight(1)
+        layout.addWidget(separator2)
+        
+        # Notes section
+        notes_section_label = QLabel("Notes")
+        notes_section_label.setStyleSheet(f"""
+            color: {v['on_surface_variant']};
+            font-size: 10px;
+            font-weight: 500;
+        """)
+        layout.addWidget(notes_section_label)
+        
+        note_value = self._saved_metadata.get("notes")
+        if note_value:
+            note_text = note_value[:50] + "..." if len(note_value) > 50 else note_value
+            note_row = QHBoxLayout()
+            note_row.setSpacing(6)
+            
+            notes_icon = self._create_colored_icon("notes.svg", v.qcolor('on_surface_variant'))
+            note_icon_label = QLabel()
+            note_icon_label.setPixmap(notes_icon.pixmap(16, 16))
+            note_icon_label.setFixedWidth(16)
+            note_row.addWidget(note_icon_label)
+            
+            note_label = QLabel(note_text)
+            note_label.setWordWrap(True)
+            note_label.setStyleSheet(f"""
+                color: {v['on_surface_variant']};
+                font-size: 10px;
+            """)
+            note_row.addWidget(note_label)
+            note_row.addStretch()
+            layout.addLayout(note_row)
+        else:
+            no_notes = QLabel("No notes")
+            no_notes.setStyleSheet(f"""
+                color: {v['on_surface_variant']};
+                font-size: 10px;
+                font-style: italic;
+            """)
+            layout.addWidget(no_notes)
+        
+        # Retake button
+        retake_btn = QPushButton("Retake Photo")
+        retake_btn.setObjectName("RetakeButton")
+        retake_btn.setCursor(Qt.PointingHandCursor)
+        retake_btn.setFixedHeight(40)
+        
+        retake_icon = self._create_colored_icon("retake_image.svg", v.qcolor('on_surface_variant'))
+        retake_btn.setIcon(retake_icon)
+        retake_btn.setIconSize(QSize(16, 16))
+        
+        retake_btn.setStyleSheet(f"""
+            QPushButton#RetakeButton {{
+                background-color: {v['surface_container_high']};
+                color: {v['on_surface_variant']};
+                border: 1px solid {v['outline_variant']};
+                border-radius: 20px;
+                padding: 0 16px;
+                font-size: 12px;
+                font-weight: 500;
+            }}
+            QPushButton#RetakeButton:hover {{
+                background-color: {v['surface_container_highest']};
+                border: 1px solid {v['outline']};
+                color: {v['on_surface']};
+            }}
+        """)
+        retake_btn.clicked.connect(self._on_retake)
+        layout.addWidget(retake_btn)
+        
+        return panel
+
+    def _create_colored_icon(self, icon_name: str, qcolor):
+        """Loads an SVG and repaints it with the given QColor."""
+        mood_path = get_app_paths("DailySelfie", ensure=False)
+        ICONS_DIR = mood_path.project_root / "gui" / "assets" / "icons"
+        path = ICONS_DIR / icon_name
+        if not path.exists():
+            return QIcon()
+
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            return QIcon()
+
+        colored_pixmap = QPixmap(pixmap.size())
+        colored_pixmap.fill(Qt.transparent)
+
+        painter = QPainter(colored_pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.drawPixmap(0, 0, pixmap)
+        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+        painter.fillRect(colored_pixmap.rect(), qcolor)
+        painter.end()
+
+        return QIcon(colored_pixmap)
+

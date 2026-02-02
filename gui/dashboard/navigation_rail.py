@@ -2,8 +2,8 @@
 from enum import Enum
 from PySide6.QtWidgets import QLabel
 from pathlib import Path
-from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QIcon, QPixmap, QPainter
+from PySide6.QtCore import Qt, Signal, QPropertyAnimation, QEasingCurve, Property
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QBrush, QColor, QPainterPath
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSizePolicy
     )
@@ -51,6 +51,15 @@ class NavButton(QWidget):
         self._collapsed = False
         self._role = role
         self.page_id = None
+        
+        # Animation fill progress (0.0 to 1.0)
+        self._fill_progress = 0.0
+        self._fill_color = QColor(0, 0, 0, 0)  # Will be set based on state
+        
+        # Fill animation
+        self._fill_anim = QPropertyAnimation(self, b"fillProgress")
+        self._fill_anim.setDuration(200)  # 200ms for smooth feel
+        self._fill_anim.setEasingCurve(QEasingCurve.OutCubic)
 
 
         self.setAttribute(Qt.WA_Hover, True)
@@ -126,9 +135,21 @@ class NavButton(QWidget):
         self.updateStyle()   
 
     # Set the checked state of the navbutton
-    def setChecked(self, value: bool):
+    def setChecked(self, value: bool, animate: bool = True):
+        was_checked = self._checked
         self._checked = value
-        # print("Checked: ", value)
+        
+        # Trigger fill animation when becoming checked
+        if value and not was_checked:
+            if animate:
+                self._animateFillIn()
+            else:
+                # Skip animation, set to full fill immediately
+                self._updateFillColor()
+                self._fill_progress = 1.0
+        elif not value and was_checked:
+            self._animateFillOut()
+        
         self.updateStyle()
 
     # Get the checked state of the navbutton
@@ -152,6 +173,75 @@ class NavButton(QWidget):
             layout.setAlignment(self.icon_container, Qt.AlignCenter)
         else:
             layout.setAlignment(self.icon_container, Qt.AlignLeft)
+
+    # --------------------------------------------------
+    # Fill Animation Properties & Methods
+    # --------------------------------------------------
+    
+    def getFillProgress(self) -> float:
+        return self._fill_progress
+    
+    def setFillProgress(self, value: float):
+        self._fill_progress = value
+        self.update()  # Trigger repaint
+    
+    fillProgress = Property(float, getFillProgress, setFillProgress)
+    
+    def _animateFillIn(self):
+        """Animate fill expanding from center outward"""
+        self._fill_anim.stop()
+        self._updateFillColor()
+        self._fill_anim.setStartValue(0.5)
+        self._fill_anim.setEndValue(1.0)
+        self._fill_anim.start()
+    
+    def _animateFillOut(self):
+        """Animate fill shrinking to center (instant for now)"""
+        self._fill_progress = 0.0
+        self.update()
+    
+    def _updateFillColor(self):
+        """Set fill color based on current role"""
+        v = theme_vars()
+        if self._role == ActionRole.ACTION:
+            self._fill_color = v.qcolor("tertiary_container")
+        else:
+            self._fill_color = v.qcolor("secondary_container")
+    
+    def paintEvent(self, event):
+        """Custom paint to draw animated horizontal fill"""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Only draw animated fill if progress > 0 and checked
+        if self._fill_progress > 0 and self._checked:
+            rect = self.rect()
+            border_radius = 16 if self._role == ActionRole.ACTION else 24
+            
+            # Calculate fill width from center
+            center_x = rect.width() / 2
+            fill_half_width = (rect.width() / 2) * self._fill_progress
+            
+            # Create clipping path for rounded rect
+            path = QPainterPath()
+            path.addRoundedRect(float(rect.x()), float(rect.y()), 
+                                float(rect.width()), float(rect.height()), 
+                                border_radius, border_radius)
+            painter.setClipPath(path)
+            
+            # Draw fill from center expanding outward
+            fill_left = center_x - fill_half_width
+            fill_right = center_x + fill_half_width
+            fill_rect = rect.adjusted(int(fill_left), 0, int(fill_right - rect.width()), 0)
+            
+            painter.setBrush(QBrush(self._fill_color))
+            painter.setPen(Qt.NoPen)
+            painter.drawRoundedRect(fill_rect, border_radius, border_radius)
+        
+        painter.end()
+        
+        # Let base class handle children
+        super().paintEvent(event)
 
 
     # Update the style of the navbutton
@@ -201,10 +291,10 @@ class NavButton(QWidget):
                 }}
             """
 
-        # CHECKED/SELECTED STATE - M3: secondary_container, on_secondary_container for icon/text
+        # CHECKED/SELECTED STATE - M3: transparent bg (painted by paintEvent), on_secondary_container for icon/text
         styleChecked = f"""
                 QWidget#NavButton {{ 
-                    background-color: {vars['secondary_container']}; 
+                    background-color: transparent; 
                     border-radius: 24px; 
                 }}
                 QLabel {{ 
@@ -239,10 +329,10 @@ class NavButton(QWidget):
                 }}
             """
 
-        # ACTION (FAB) CHECKED - M3: tertiary_container for emphasis
+        # ACTION (FAB) CHECKED - M3: transparent bg (painted by paintEvent), on_tertiary_container for text
         styleActionChecked = f"""
                 QWidget#NavButton {{ 
-                    background-color: {vars['tertiary_container']}; 
+                    background-color: transparent; 
                     border-radius: 16px; 
                 }}
                 QLabel {{ 
@@ -365,7 +455,7 @@ class NavigationRail(QWidget):
         btn_settings.clicked.connect(lambda: self.toggleCheckedState(btn_settings))
         vlayout.addWidget(btn_settings)
 
-        btn_dashboard.setChecked(True) # Defaultly Selected
+        btn_dashboard.setChecked(True, animate=False) # Defaultly Selected
 
         self.applyCollapsedState(self._is_collapsed)
         
