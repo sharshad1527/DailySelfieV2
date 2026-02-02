@@ -1,7 +1,8 @@
 # gui/dashboard/window_con.py
-from PySide6.QtCore import Qt
+import sys
+from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QRect
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QApplication
 )
 
 from gui.theme.theme_vars import theme_vars 
@@ -234,30 +235,101 @@ class DashboardShell(QMainWindow):
         self._top_bar_layout.addWidget(btn_close)
 
     def _toggle_maximize(self, event=None):
-        if self.isMaximized():
-            self.showNormal()
-            self._container.setStyleSheet(self._container.styleSheet().replace("border-radius: 0px;", "border-radius: 12px;"))
+        # On Linux, use native maximize (smooth animations built-in)
+        if sys.platform != 'win32':
+            if self.isMaximized():
+                self.showNormal()
+                self._container.setStyleSheet(self._container.styleSheet().replace("border-radius: 0px;", "border-radius: 12px;"))
+            else:
+                self.showMaximized()
+                self._container.setStyleSheet(self._container.styleSheet().replace("border-radius: 12px;", "border-radius: 0px;"))
+            return
+        
+        # On Windows, animate the geometry for smooth maximize/restore
+        if self._is_maximized_custom:
+            self._animate_to_geometry(self._normal_geometry, maximizing=False)
         else:
-            self.showMaximized()
-            self._container.setStyleSheet(self._container.styleSheet().replace("border-radius: 12px;", "border-radius: 0px;"))
+            # Store current geometry before maximizing
+            self._normal_geometry = self.geometry()
+            screen = QApplication.primaryScreen().availableGeometry()
+            self._animate_to_geometry(screen, maximizing=True)
+
+    def _animate_to_geometry(self, target_rect, maximizing):
+        """Smoothly animate window geometry change."""
+        self._geo_anim = QPropertyAnimation(self, b"geometry")
+        self._geo_anim.setDuration(200)  # 200ms for snappy but smooth feel
+        self._geo_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._geo_anim.setStartValue(self.geometry())
+        self._geo_anim.setEndValue(target_rect)
+        
+        # Update border radius and state after animation completes
+        def on_finished():
+            self._is_maximized_custom = maximizing
+            if maximizing:
+                self._container.setStyleSheet(self._container.styleSheet().replace("border-radius: 12px;", "border-radius: 0px;"))
+            else:
+                self._container.setStyleSheet(self._container.styleSheet().replace("border-radius: 0px;", "border-radius: 12px;"))
+        
+        self._geo_anim.finished.connect(on_finished)
+        self._geo_anim.start()
 
     def _minimize_window(self):
         # Store pre-minimize state so we can restore properly
-        self._was_maximized_before_minimize = self.isMaximized()
+        self._was_maximized_before_minimize = self._is_maximized_custom if sys.platform == 'win32' else self.isMaximized()
         
-        # On Windows, frameless windows that are maximized don't minimize properly
-        # We need to go through showNormal() first, then minimize
-        if self.isMaximized():
-            self.showNormal()
+        # On Windows, animate shrinking before minimize
+        if sys.platform == 'win32':
+            # Store geometry for restore
+            if not self._is_maximized_custom:
+                self._normal_geometry = self.geometry()
+            
+            # Animate shrinking toward taskbar area
+            screen = QApplication.primaryScreen().availableGeometry()
+            # Shrink toward bottom center (where taskbar usually is)
+            target = QRect(
+                screen.center().x() - 200,
+                screen.bottom() - 100,
+                400, 50
+            )
+            
+            self._min_anim = QPropertyAnimation(self, b"geometry")
+            self._min_anim.setDuration(150)
+            self._min_anim.setEasingCurve(QEasingCurve.InCubic)
+            self._min_anim.setStartValue(self.geometry())
+            self._min_anim.setEndValue(target)
+            self._min_anim.finished.connect(self._do_minimize)
+            self._min_anim.start()
+        else:
+            # On Linux, just minimize normally
+            if self.isMaximized():
+                self.showNormal()
+            self.showMinimized()
+
+    def _do_minimize(self):
+        """Actually minimize after animation."""
         self.showMinimized()
 
     def showEvent(self, event):
         super().showEvent(event)
-        # Restore maximized state if we were maximized before minimizing
+        
+        # Initialize custom maximize tracking for Windows
+        if not hasattr(self, '_is_maximized_custom'):
+            self._is_maximized_custom = False
+            self._normal_geometry = self.geometry()
+        
+        # Restore state after minimize
         if hasattr(self, '_was_maximized_before_minimize') and self._was_maximized_before_minimize:
             self._was_maximized_before_minimize = False
-            self.showMaximized()
-            self._container.setStyleSheet(self._container.styleSheet().replace("border-radius: 12px;", "border-radius: 0px;"))
+            
+            if sys.platform == 'win32':
+                # Restore to maximized with animation
+                screen = QApplication.primaryScreen().availableGeometry()
+                self.setGeometry(screen)
+                self._is_maximized_custom = True
+                self._container.setStyleSheet(self._container.styleSheet().replace("border-radius: 12px;", "border-radius: 0px;"))
+            else:
+                self.showMaximized()
+                self._container.setStyleSheet(self._container.styleSheet().replace("border-radius: 12px;", "border-radius: 0px;"))
 
     def _setup_resize_grips(self):
         self._grips.append(ResizeGrip(self, Qt.LeftEdge))
