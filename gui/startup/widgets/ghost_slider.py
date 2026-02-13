@@ -156,7 +156,7 @@ class GhostOpacitySlider(QWidget):
         # 5. Draw Text (Fill Color)
         # -------------------------
         # This draws the text *again*, but clipped to the fill rect
-        p.setClipRect(fill_rect) 
+        p.setClipRect(fill_rect, Qt.IntersectClip)
         
         p.setPen(v.qcolor("on_primary"))
         p.setFont(font)
