@@ -158,7 +158,7 @@ def main(argv=None):
 
     # Group: Runtime Modes
     grp_run = parser.add_argument_group("Runtime Modes")
-    grp_run.add_argument("--start-up", action="store_true", help="Launch the 'Daily Prompt' popup (GUI)")
+    grp_run.add_argument("--start-up", action="store_true", help="Launch the 'Daily Selfie Time' popup (GUI)")
     grp_run.add_argument("--capture", action="store_true", help="Take a photo immediately (CLI / Headless mode)")
     grp_run.add_argument("--allow-retake", action="store_true", help="Overwrite existing photo for today if present")
     

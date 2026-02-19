@@ -52,12 +52,12 @@ class ResizeGrip(QWidget):
             event.accept()
 
     def mouseReleaseEvent(self, event):
-        self.drag_pos = None
+        self.start_pos = None
 
     def mouseMoveEvent(self, event):
-        # We need this to actually process the move!
-        if self.drag_pos:
-            delta = event.globalPosition().toPoint() - self.drag_pos
+        # Fallback manual resize when startSystemResize() failed
+        if hasattr(self, 'start_pos') and self.start_pos is not None:
+            delta = event.globalPosition().toPoint() - self.start_pos
             self._resize_window(delta)
             event.accept()
 
@@ -86,17 +86,21 @@ class ResizeGrip(QWidget):
         elif self.edge == Qt.BottomRightCorner:
             w += dx; h += dy
 
-        if w > 1100 and h > 620:
+        if w >= 1100 and h >= 620:
             win.setGeometry(x, y, w, h)
 
 
 class DashboardShell(QMainWindow):
     def __init__(self, width=1100, height=620):
         super().__init__()
-        self.setWindowTitle("Daily Selfie")
+        self.setWindowTitle("Daily Selfie - Dashboard")
         
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window) # Added Qt.Window for better OS handling
         self.setAttribute(Qt.WA_TranslucentBackground)
+
+        # Initialize custom maximize tracking early (before any call to _toggle_maximize)
+        self._is_maximized_custom = False
+        self._normal_geometry = None  # Will be set to actual geometry in showEvent
 
         self.resize(width, height)
         self.setMinimumSize(1100, 620)
@@ -312,9 +316,8 @@ class DashboardShell(QMainWindow):
     def showEvent(self, event):
         super().showEvent(event)
         
-        # Initialize custom maximize tracking for Windows
-        if not hasattr(self, '_is_maximized_custom'):
-            self._is_maximized_custom = False
+        # Set _normal_geometry to actual geometry on first show if not yet set
+        if self._normal_geometry is None:
             self._normal_geometry = self.geometry()
         
         # Restore state after minimize
