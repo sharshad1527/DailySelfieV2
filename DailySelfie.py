@@ -271,6 +271,14 @@ def main(argv=None):
             print(f"Error: Theme '{args.theme}' not found. Available themes: {available}")
             return 1
 
+    # -------------------------------------------------
+    # EARLY GUI INIT (To ensure QObject is created after QApp)
+    # -------------------------------------------------
+    app = None
+    if args.start_up:
+        from PySide6.QtWidgets import QApplication
+        app = QApplication(sys.argv)
+
     # 3. Initialize Controller
     theme_controller = ThemeController(cfg, theme_dir)
     theme_controller.initialize()
@@ -331,10 +339,12 @@ def main(argv=None):
         init_theme_vars(theme_controller)
 
         # ---- THEN GUI IMPORTS ----
-        from PySide6.QtWidgets import QApplication
         from gui.startup.startup_window import StartupWindow
 
-        app = QApplication(sys.argv)
+        if app is None:
+             from PySide6.QtWidgets import QApplication
+             app = QApplication(sys.argv)
+
         win = StartupWindow(allow_retake=final_allow_retake)
         win.show()
         return app.exec()
