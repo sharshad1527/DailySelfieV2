@@ -56,8 +56,7 @@ def set_autostart(enabled: bool) -> None:
     try:
         write_config(config_path, cfg)
     except Exception as e:
-        print("Trying Again To Wrtie config")
-    else:
+        print(f"Write config failed ({e}), falling back to bootstrap.")
         write_config_bootstrap(config_path, cfg)
     
     
