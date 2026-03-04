@@ -26,10 +26,10 @@ def disable_desktop_entry(paths):
 def is_desktop_entry_enabled(paths):
     system = platform.system().lower()
     if system == "linux":
-        from .linux import is_autostart_desktop_entry
+        from .linux import is_desktop_entry_enabled as _is_enabled
     elif system == "windows":
-        from .windows import is_autostart_desktop_entry
+        from .windows import is_desktop_entry_enabled as _is_enabled
     else:
         return False
-    return is_desktop_entry_enabled(paths.app_name)
+    return _is_enabled(paths.app_name)
 

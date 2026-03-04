@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Material Design Drop Shadows -->
+    <filter id="shadow-sm" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.2" />
+    </filter>
+    <filter id="shadow-md" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity="0.25" />
+    </filter>
+    <filter id="shadow-inner" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.6" />
+    </filter>
+
+    <!-- UI Matched Gradients -->
+    <linearGradient id="ghostGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#C4B5FD" />
+      <stop offset="100%" stop-color="#7C3AED" />
+    </linearGradient>
+
+    <!-- Sunset/Sunrise Gradient for the Daily vibe -->
+    <linearGradient id="lensGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FBBF24" />
+      <stop offset="50%" stop-color="#F472B6" />
+      <stop offset="100%" stop-color="#8B5CF6" />
+    </linearGradient>
+  </defs>
+
+  <!-- GHOST POLAROID (Yesterday's Photo) -->
+  <g transform="translate(256, 256) rotate(-10) translate(-256, -256)">
+    <!-- Back Card -->
+    <rect x="116" y="86" width="280" height="340" rx="24" fill="url(#ghostGrad)" filter="url(#shadow-sm)" />
+    <!-- Ghosted Inner Photo Area -->
+    <rect x="136" y="106" width="240" height="230" rx="16" fill="#FFFFFF" opacity="0.15" />
+    <!-- Ghosted Text Lines -->
+    <rect x="148" y="356" width="120" height="16" rx="8" fill="#FFFFFF" opacity="0.3" />
+    <rect x="148" y="384" width="80" height="12" rx="6" fill="#FFFFFF" opacity="0.2" />
+  </g>
+
+  <!-- MAIN POLAROID (Today's Photo) -->
+  <g transform="translate(256, 256) rotate(6) translate(-256, -256)">
+    <!-- Front Card -->
+    <rect x="116" y="86" width="280" height="340" rx="24" fill="#FFFFFF" filter="url(#shadow-md)" />
+
+    <!-- Photo Dark Area (Matches your app's #121212 theme) -->
+    <rect x="136" y="106" width="240" height="230" rx="16" fill="#121212" filter="url(#shadow-inner)" />
+
+    <!-- Lens Outer Ring (Vibrant) -->
+    <circle cx="256" cy="221" r="76" fill="url(#lensGrad)" filter="url(#shadow-sm)" />
+
+    <!-- Lens Inner Ring (Dark) -->
+    <circle cx="256" cy="221" r="46" fill="#1A1A1A" />
+
+    <!-- Lens Reflections / Hidden Smile -->
+    <!-- Left Reflection (Eye) -->
+    <circle cx="240" cy="205" r="12" fill="#FFFFFF" />
+    <!-- Right Reflection (Eye - smaller to mimic curved glass) -->
+    <circle cx="272" cy="212" r="6" fill="#FFFFFF" />
+    <!-- Aperture Curve (Smile) -->
+    <path d="M 234 235 A 24 24 0 0 0 278 235" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round" fill="none" />
+
+    <!-- Bottom UI Lines (Simulating Notes) -->
+    <rect x="144" y="360" width="150" height="16" rx="8" fill="#E5E7EB" />
+    <rect x="144" y="388" width="90" height="12" rx="6" fill="#E5E7EB" />
+    
+    <!-- Mood Emoji Icon Indicator -->
+    <circle cx="354" cy="378" r="16" fill="#FDE68A" />
+    <circle cx="349" cy="374" r="2.5" fill="#B45309" />
+    <circle cx="359" cy="374" r="2.5" fill="#B45309" />
+    <path d="M 348 381 A 6 6 0 0 0 360 381" stroke="#B45309" stroke-width="2.5" stroke-linecap="round" fill="none" />
+  </g>
+</svg>

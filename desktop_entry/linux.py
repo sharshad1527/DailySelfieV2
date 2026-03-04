@@ -110,5 +110,5 @@ def is_desktop_entry_enabled(app_name: str = "DailySelfie") -> bool:
     """
     Check whether Linux autostart is enabled.
     """
-    return _desktop_file(app_name).exists()
+    return _desktop_file_path(app_name).exists()
 
