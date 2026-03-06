@@ -362,7 +362,9 @@ def main(argv=None):
 
         app.setDesktopFileName("DailySelfie")
 
-        app_ico_path = paths.project_root / "gui" / "assets" / "icons" / "app.svg"
+        # Use .ico on Windows for proper taskbar icon; .png elsewhere
+        icon_ext = "app.ico" if paths.os_name == "windows" else "app.png"
+        app_ico_path = paths.project_root / "gui" / "assets" / "icons" / icon_ext
         if app_ico_path.exists():
             app.setWindowIcon(QIcon(str(app_ico_path)))
 
@@ -415,7 +417,9 @@ def main(argv=None):
         app.setApplicationDisplayName("Dashboard")
         app.setDesktopFileName("DailySelfie")
 
-        app_ico_path = paths.project_root / "gui" / "assets" / "icons" / "app.svg"
+        # Use .ico on Windows for proper taskbar icon; .png elsewhere
+        icon_ext = "app.ico" if paths.os_name == "windows" else "app.png"
+        app_ico_path = paths.project_root / "gui" / "assets" / "icons" / icon_ext
         if app_ico_path.exists():
             app.setWindowIcon(QIcon(str(app_ico_path)))
 

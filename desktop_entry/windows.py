@@ -52,7 +52,7 @@ def enable_desktop_entry(paths) -> None:
     Target:   pythonw.exe from the project venv (avoids console window)
     Args:     path to DailySelfie.py
     WorkDir:  project root
-    Icon:     app.svg (placeholder — Windows won't render it, swap to .ico later)
+    Icon:     app.ico
     """
     if platform.system().lower() != "windows":
         raise RuntimeError("Windows desktop entry called on non-Windows system")
@@ -64,7 +64,7 @@ def enable_desktop_entry(paths) -> None:
         python_exe = paths.venv_dir / "Scripts" / "python.exe"
 
     app_entry = paths.project_root / "DailySelfie.py"
-    icon_path = paths.project_root / "gui" / "assets" / "icons" / "app.svg"
+    icon_path = paths.project_root / "gui" / "assets" / "icons" / "app.ico"
 
     for lnk_path in _shortcut_paths(paths.app_name):
         # Ensure parent directory exists (Start Menu may not have Programs yet)

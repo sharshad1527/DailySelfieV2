@@ -18,7 +18,7 @@ Version=1.0
 Name=Daily Selfie
 Comment=Daily Selfie Capture App
 Exec= sh -c "sleep 30 && {exec_cmd}"
-Icon=camera
+Icon= {icon_entry}
 Terminal=false
 StartupWMClass=DailySelfie
 X-GNOME-Autostart-enabled=true
@@ -45,6 +45,7 @@ def enable_autostart(paths) -> None:
     autostart_dir = _autostart_dir()
     autostart_dir.mkdir(parents=True, exist_ok=True)
 
+    icon_entry = paths.project_root / "gui" / "assets" / "icons" / "app.svg"
     wrapper_path = Path.home() / ".local" / "bin" / "dailyselfie"
 
     if wrapper_path.exists():
@@ -59,7 +60,7 @@ def enable_autostart(paths) -> None:
 
         exec_cmd = f'sh -c"sleep 10 && {python_exe}" "{app_entry}" --start-up'
 
-    desktop_content = DESKTOP_TEMPLATE.format(exec_cmd=exec_cmd)
+    desktop_content = DESKTOP_TEMPLATE.format(exec_cmd=exec_cmd, icon_entry=icon_entry)
 
     desktop_path = _desktop_file(paths.app_name)
 
