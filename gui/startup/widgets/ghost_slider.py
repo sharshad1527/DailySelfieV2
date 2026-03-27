@@ -85,7 +85,7 @@ class GhostOpacitySlider(QWidget):
     def _value_to_y(self):
         track = self._track_rect()
         available_height = track.height()
-        return track.bottom() - int(available_height * self._ratio())
+        return (track.y() + track.height()) - int(available_height * self._ratio())
 
     # --------------------------------------------------
     # Paint
@@ -156,7 +156,7 @@ class GhostOpacitySlider(QWidget):
         # 5. Draw Text (Fill Color)
         # -------------------------
         # This draws the text *again*, but clipped to the fill rect
-        p.setClipRect(fill_rect) 
+        p.setClipRect(fill_rect, Qt.IntersectClip)
         
         p.setPen(v.qcolor("on_primary"))
         p.setFont(font)
@@ -221,7 +221,8 @@ class GhostOpacitySlider(QWidget):
         if height <= 0: return 
         
         # Clamp y strictly
-        y = max(track.top(), min(track.bottom(), y))
+        bottom = track.y() + track.height()
+        y = max(track.top(), min(bottom, y))
         
         relative_y = y - track.top()
         ratio = 1.0 - (relative_y / height)
