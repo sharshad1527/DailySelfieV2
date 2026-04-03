@@ -271,11 +271,15 @@ def main(argv=None):
             print(f"Error: Theme '{args.theme}' not found. Available themes: {available}")
             return 1
 
-    # 3. Initialize Controller
+    # 3. Instantiate QApplication first (required by PySide6 QObjects)
+    from PySide6.QtWidgets import QApplication
+    app = QApplication(sys.argv)
+
+    # 4. Initialize Controller
     theme_controller = ThemeController(cfg, theme_dir)
     theme_controller.initialize()
 
-    # 4. Apply CLI Theme Overrides
+    # 5. Apply CLI Theme Overrides
     theme_action = False
 
     if args.theme:
@@ -331,10 +335,8 @@ def main(argv=None):
         init_theme_vars(theme_controller)
 
         # ---- THEN GUI IMPORTS ----
-        from PySide6.QtWidgets import QApplication
         from gui.startup.startup_window import StartupWindow
 
-        app = QApplication(sys.argv)
         win = StartupWindow(allow_retake=final_allow_retake)
         win.show()
         return app.exec()
