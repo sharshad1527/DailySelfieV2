@@ -10,3 +10,7 @@ dist/
 
 # Graphify knowledge graph
 graphify-out/
+
+# Obsidian & Local Wiki ignores
+wiki/.obsidian/
+wiki/graphify-out/
