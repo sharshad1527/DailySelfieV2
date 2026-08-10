@@ -38,39 +38,6 @@ try:
 except Exception:
     cv2 = None  # type: ignore
 
-# -------------------------------------------------------------
-# Helper: suppress native stderr during noisy native calls
-# -------------------------------------------------------------
-@contextlib.contextmanager
-def suppress_stderr():
-    """
-    Temporarily redirect low-level C library stderr to os.devnull.
-    Works on POSIX and Windows. Use only around noisy native calls.
-    """
-    devnull = None
-    old_stderr_fd = None
-    try:
-        devnull = open(os.devnull, "w")
-        # duplicate original stderr fd
-        old_stderr_fd = os.dup(2)
-        # redirect stderr to devnull
-        os.dup2(devnull.fileno(), 2)
-        yield
-    except Exception:
-        # if anything goes wrong, yield and do not crash
-        yield
-    finally:
-        try:
-            if old_stderr_fd is not None:
-                os.dup2(old_stderr_fd, 2)
-                os.close(old_stderr_fd)
-            if devnull is not None:
-                devnull.close()
-        except Exception:
-            # best-effort restore; ignore failures
-            pass
-
-
 @dataclass
 class CameraResult:
     index: int
@@ -112,18 +79,13 @@ class Camera:
 
         # VideoCapture accepts (index, apiPreference) in newer OpenCV
         try:
-            with suppress_stderr():
-                try:
-                    self._cap = cv2.VideoCapture(self.index, flags)
-                except TypeError:
-                    # older bindings may not accept two args
-                    self._cap = cv2.VideoCapture(self.index)
-        except Exception:
-            # in case suppress_stderr wrapper fails, try without it
             try:
+                self._cap = cv2.VideoCapture(self.index, flags)
+            except TypeError:
+                # older bindings may not accept two args
                 self._cap = cv2.VideoCapture(self.index)
-            except Exception:
-                self._cap = None
+        except Exception:
+            self._cap = None
 
         if not self._cap or not self._cap.isOpened():
             # Ensure we release if it was somehow created but not opened properly
@@ -165,8 +127,7 @@ class Camera:
             raise RuntimeError("Camera not opened")
         # reading can also emit native warnings — suppress them
         try:
-            with suppress_stderr():
-                ret, frame = self._cap.read()
+            ret, frame = self._cap.read()
         except Exception as e:
             raise RuntimeError(f"Failed to read frame from camera: {e}")
         if not ret or frame is None:
@@ -203,24 +164,18 @@ def list_cameras(max_test: int = 8, only_available: bool = True) -> Dict[int, Ca
         try:
             backend = cv2.CAP_DSHOW if platform.system().lower() == "windows" else cv2.CAP_ANY
             try:
-                with suppress_stderr():
-                    try:
-                        cap = cv2.VideoCapture(i, backend)
-                    except TypeError:
-                        cap = cv2.VideoCapture(i)
-            except Exception:
-                # fallback attempt without suppression
                 try:
+                    cap = cv2.VideoCapture(i, backend)
+                except TypeError:
                     cap = cv2.VideoCapture(i)
-                except Exception as e:
-                    cap = None
-                    message = str(e)
+            except Exception as e:
+                cap = None
+                message = str(e)
 
             opened = bool(cap and cap.isOpened())
             if opened:
                 try:
-                    with suppress_stderr():
-                        ret, _ = cap.read()
+                    ret, _ = cap.read()
                 except Exception:
                     ret = False
                 read_ok = bool(ret)
