@@ -252,6 +252,10 @@ def main(argv=None):
     cfg = load_config(config_path)
     paths = apply_config_to_paths(bootstrap_paths, cfg)
 
+    # Instantiate QApplication before ThemeController because ThemeController is a QObject with Signals
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication(sys.argv)
+
     from gui.theme.theme_controller import ThemeController
     from gui.theme.theme_loader import list_theme_files
 
@@ -334,7 +338,7 @@ def main(argv=None):
         from PySide6.QtWidgets import QApplication
         from gui.startup.startup_window import StartupWindow
 
-        app = QApplication(sys.argv)
+        app = QApplication.instance() or QApplication(sys.argv)
         win = StartupWindow(allow_retake=final_allow_retake)
         win.show()
         return app.exec()
