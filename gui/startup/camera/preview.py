@@ -71,4 +71,8 @@ class CameraPreviewThread(QThread):
 
     def stop(self):
         self._running = False
-        self.wait(1000)
+        # Loop-retry join so a slow frame read can't leave the thread running
+        for _ in range(5):
+            if self.wait(1000):
+                return
+        print("CameraPreviewThread: WARNING - camera thread still running after stop()")

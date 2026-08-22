@@ -17,6 +17,8 @@ class ResizeGrip(QWidget):
         self.setMouseTracking(True) 
         self.setStyleSheet("background: transparent;") 
         self.drag_pos = None
+        self.start_pos = None
+        self.start_geo = None
 
         # Changing cursor icon based on which edge this grip represents
         if edge in (Qt.LeftEdge, Qt.RightEdge):
@@ -44,7 +46,8 @@ class ResizeGrip(QWidget):
                 edges = Qt.BottomEdge | Qt.RightEdge
 
             # Attempt system resize first (smoother, handles OS snapping)
-            if win.windowHandle().startSystemResize(edges):
+            handle = win.windowHandle()
+            if handle is not None and handle.startSystemResize(edges):
                 return
             
             self.start_pos = event.globalPosition().toPoint()
@@ -63,7 +66,7 @@ class ResizeGrip(QWidget):
 
     def _resize_window(self, delta):
         win = self.window()
-        if win.isMaximized(): return 
+        if getattr(win, "_is_maximized_custom", False) or win.isMaximized(): return 
         
         # Use stored start geometry for stable resizing
         x, y, w, h = self.start_geo.x(), self.start_geo.y(), self.start_geo.width(), self.start_geo.height()
@@ -155,13 +158,38 @@ class DashboardShell(QMainWindow):
 
     # --- Helper Methods --- #
 
+    def _current_screen(self):
+        """Return the QScreen the window is currently on (fallback chain)."""
+        handle = self.windowHandle()
+        if handle is not None and handle.screen() is not None:
+            return handle.screen()
+        center = self.geometry().center()
+        screen = QApplication.screenAt(center)
+        if screen is not None:
+            return screen
+        return QApplication.primaryScreen()
+
+    def _current_screen_geometry(self):
+        """Available geometry of the screen the window is currently on."""
+        screen = self._current_screen()
+        return screen.availableGeometry() if screen else QApplication.primaryScreen().availableGeometry()
+
+
     def _start_drag(self, event):
         if event.button() == Qt.LeftButton:
+            if self._is_maximized_custom or self.isMaximized():
+                self._drag_pos = None
+                return
+            # Prefer the system move (required for Wayland); X11 falls back below
+            handle = self.windowHandle()
+            if handle is not None and handle.startSystemMove():
+                self._drag_pos = None
+                return
             self._drag_pos = event.globalPosition().toPoint()
 
     def _perform_drag(self, event):
         if self._drag_pos and event.buttons() & Qt.LeftButton:
-            if not self.isMaximized():
+            if not (self._is_maximized_custom or self.isMaximized()):
                 delta = event.globalPosition().toPoint() - self._drag_pos
                 self.move(self.pos() + delta)
                 self._drag_pos = event.globalPosition().toPoint()
@@ -255,8 +283,7 @@ class DashboardShell(QMainWindow):
         else:
             # Store current geometry before maximizing
             self._normal_geometry = self.geometry()
-            screen = QApplication.primaryScreen().availableGeometry()
-            self._animate_to_geometry(screen, maximizing=True)
+            self._animate_to_geometry(self._current_screen_geometry(), maximizing=True)
 
     def _animate_to_geometry(self, target_rect, maximizing):
         """Smoothly animate window geometry change."""
@@ -288,7 +315,7 @@ class DashboardShell(QMainWindow):
                 self._normal_geometry = self.geometry()
             
             # Animate shrinking toward taskbar area
-            screen = QApplication.primaryScreen().availableGeometry()
+            screen = self._current_screen_geometry()
             # Shrink toward bottom center (where taskbar usually is)
             target = QRect(
                 screen.center().x() - 200,
@@ -326,8 +353,7 @@ class DashboardShell(QMainWindow):
             
             if sys.platform == 'win32':
                 # Restore to maximized with animation
-                screen = QApplication.primaryScreen().availableGeometry()
-                self.setGeometry(screen)
+                self.setGeometry(self._current_screen_geometry())
                 self._is_maximized_custom = True
                 self._container.setStyleSheet(self._container.styleSheet().replace("border-radius: 12px;", "border-radius: 0px;"))
             else:

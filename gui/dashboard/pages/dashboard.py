@@ -32,33 +32,6 @@ MOOD_GIF_MAP = {
     "Awful": "sosad.gif",
 }
 
-class RecentSelfieCarouselPlaceholder(QFrame):
-    """
-    Placeholder for recent selfie carousel (horizontal list).
-    """
-    def __init__(self):
-        super().__init__()
-
-        vars = theme_vars()
-
-        self.setObjectName("RecentSelfieCarousel")
-        self.setFixedHeight(120)
-
-        self.setStyleSheet(f"""
-            QFrame#RecentSelfieCarousel {{
-                background-color: {vars['surface_container_low']};
-                border-radius: 12px;
-            }}
-        """)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-
-        label = QLabel("Recent Selfies (Carousel)")
-        label.setAlignment(Qt.AlignCenter)
-
-        layout.addWidget(label)
-
-
 class TodaySelfieCard(QFrame):
     """
     Primary dashboard card showing today's selfie (image fills the card).
@@ -1070,8 +1043,7 @@ class TodaySelfieInfoBox(QFrame):
         # Delete the photo file
         success, error = delete_path(image_path)
         if not success:
-            # TODO: Show error to user
-            print(f"Failed to delete photo: {error}")
+            self._show_delete_error(error)
             return
         
         # Record deletion in the index API
@@ -1090,7 +1062,19 @@ class TodaySelfieInfoBox(QFrame):
         
         # Emit signal for any external listeners
         self.delete_requested.emit()
-    
+
+    def _show_delete_error(self, error):
+        """Show an ErrorToast when deleting the photo fails."""
+        from gui.widgets.error_popup import ErrorToast
+
+        popup = ErrorToast(self, level="ERROR", message=f"Failed to delete photo: {error}")
+
+        geo = self.geometry()
+        x = geo.x() + (geo.width() - popup.width()) // 2
+        y = geo.y() + (geo.height() - popup.height()) // 2
+        popup.move(x, y)
+        popup.show()
+
     def _clear_and_show_placeholder(self):
         """Clear content and show no selfie placeholder."""
         # Remove all widgets from layout
@@ -1187,7 +1171,6 @@ class DashboardSurface(QFrame):
 
         from gui.dashboard.widgets.carousel.motion_carousel import MotionCarousel
         self._carousel = MotionCarousel()
-        # carousel = RecentSelfieCarouselPlaceholder()
         surface_layout.addWidget(self._carousel, stretch=0)  # Fixed height carousel at bottom
 
 

@@ -50,6 +50,7 @@ class StartupWindow(BaseFramelessWindow):
         self._current_qimage = None
         self._raw_ghost_image = None
         self._preview_thread = None
+        self._stopping_threads = []
         self._countdown_remaining = 0
 
         initial_timer = self.config.get("behavior", {}).get("timer_duration", 0)
@@ -484,8 +485,13 @@ class StartupWindow(BaseFramelessWindow):
 
     def _stop_preview(self):
         if self._preview_thread:
-            self._preview_thread.stop()
+            thread = self._preview_thread
             self._preview_thread = None
+            thread.stop()
+            if thread.isRunning():
+                # Keep the reference so the live thread is never garbage-collected
+                self._stopping_threads.append(thread)
+                thread.finished.connect(lambda: self._stopping_threads.remove(thread))
 
     def _update_preview(self, qimg):
         self._current_qimage = qimg 

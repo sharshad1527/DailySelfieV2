@@ -15,8 +15,6 @@ import os
 import platform
 from pathlib import Path
 
-import pylnk3
-
 
 # ─────────────────────────────────────────────
 # Path helpers
@@ -56,6 +54,13 @@ def enable_desktop_entry(paths) -> None:
     """
     if platform.system().lower() != "windows":
         raise RuntimeError("Windows desktop entry called on non-Windows system")
+
+    try:
+        import pylnk3
+    except ImportError:
+        raise RuntimeError(
+            "pylnk3 is required to create Windows shortcuts (pip install pylnk3)"
+        )
 
     # Resolve key paths
     python_exe = paths.venv_dir / "Scripts" / "pythonw.exe"

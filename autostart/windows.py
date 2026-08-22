@@ -48,7 +48,10 @@ def enable_autostart(paths) -> None:
         """
     else:
 
-        python_exe = paths.venv_dir / "Scripts" / "python.exe"
+        # Prefer pythonw.exe so no console window flashes on startup
+        python_exe = paths.venv_dir / "Scripts" / "pythonw.exe"
+        if not python_exe.exists():
+            python_exe = paths.venv_dir / "Scripts" / "python.exe"
         app_entry = paths.project_root / "DailySelfie.py"
 
         cmd_content = f"""@echo off

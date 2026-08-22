@@ -17,8 +17,8 @@ Type=Application
 Version=1.0
 Name=Daily Selfie
 Comment=Daily Selfie Capture App
-Exec= sh -c "sleep 30 && {exec_cmd}"
-Icon= {icon_entry}
+Exec={exec_cmd}
+Icon={icon_entry}
 Terminal=false
 StartupWMClass=DailySelfie
 X-GNOME-Autostart-enabled=true
@@ -49,8 +49,8 @@ def enable_autostart(paths) -> None:
     wrapper_path = Path.home() / ".local" / "bin" / "dailyselfie"
 
     if wrapper_path.exists():
-        # WE Add Small Sleep To Ensure UI loads after login
-        exec_cmd = f'sh -c "sleep 10 && {wrapper_path} --start-up"'
+        # Small sleep so the UI loads fully after login
+        exec_cmd = f"sh -c 'sleep 10 && \"{wrapper_path}\" --start-up'"
 
     else:
         # Fallback: Direct Python Call
@@ -58,7 +58,7 @@ def enable_autostart(paths) -> None:
         python_exe = paths.venv_dir / "bin" / "python"
         app_entry = paths.project_root / "DailySelfie.py"
 
-        exec_cmd = f'sh -c"sleep 10 && {python_exe}" "{app_entry}" --start-up'
+        exec_cmd = f'sh -c \'sleep 10 && "{python_exe}" "{app_entry}" --start-up\''
 
     desktop_content = DESKTOP_TEMPLATE.format(exec_cmd=exec_cmd, icon_entry=icon_entry)
 

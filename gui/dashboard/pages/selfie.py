@@ -64,6 +64,7 @@ class SelfiePage(QWidget):
         self._current_qimage = None
         self._raw_ghost_image = None
         self._preview_thread = None
+        self._stopping_threads = []
         self._countdown_remaining = 0
         self._photo_saved = False  # True when showing a saved photo
         self._review_mode = False  # True when in freeze/review mode (before saving)
@@ -606,8 +607,13 @@ class SelfiePage(QWidget):
 
     def _stop_preview(self):
         if self._preview_thread:
-            self._preview_thread.stop()
+            thread = self._preview_thread
             self._preview_thread = None
+            thread.stop()
+            if thread.isRunning():
+                # Keep the reference so the live thread is never garbage-collected
+                self._stopping_threads.append(thread)
+                thread.finished.connect(lambda: self._stopping_threads.remove(thread))
 
     def _update_preview(self, qimg):
         self._current_qimage = qimg 

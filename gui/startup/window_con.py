@@ -21,6 +21,11 @@ class DragFilter(QObject):
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+            # Prefer the system move (required for Wayland); X11 falls back below
+            handle = self._window.windowHandle()
+            if handle is not None and handle.startSystemMove():
+                self._drag_offset = None
+                return False
             self._drag_offset = event.position().toPoint()
             return False
 

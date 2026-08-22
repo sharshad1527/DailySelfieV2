@@ -74,7 +74,7 @@ def create_cli_wrapper(install_dir: Path, venv_dir: Path, project_root: Path) ->
         else:
             #--------LINUX SHELL SCRIPT--------
             # We use The Venv Python Directly in the shebang
-            content = f"""#!/home/harshad/.local/share/DailySelfie/venv/bin/python3
+            content = f"""#!{python_exe}
 # -*- coding: utf-8 -*-
 import os
 import sys

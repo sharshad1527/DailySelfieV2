@@ -6,6 +6,9 @@ tomli-w
 # GUI Framework
 PySide6>=6.6.0
 
+# Windows-only (desktop shortcuts)
+pylnk3; sys_platform == "win32"
+
 # Development Tools
 #pytest>=8.0.0
 # black

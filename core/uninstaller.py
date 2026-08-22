@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 from typing import Dict, Any
 from core.autostart_manager import set_autostart
+from core.desktop_entry_manager import set_desktop_entry
 
 def _remove_cli_wrapper(install_dir: Path):
     """
@@ -153,12 +154,17 @@ def run_uninstall(paths, cfg: Dict[str, Any]):
             return
 
     # ---------------------------------------------------------
-    # 3. Remove Autostart
+    # 3. Remove Autostart + Desktop Entry
     # ---------------------------------------------------------
     try:
         set_autostart(False)
     except Exception as e:
         print(f"Note: Failed to clean up autostart: {e}")
+
+    try:
+        set_desktop_entry(False)
+    except Exception as e:
+        print(f"Note: Failed to clean up desktop entry: {e}")
 
     # ---------------------------------------------------------
     # Remove CLI Wrapper

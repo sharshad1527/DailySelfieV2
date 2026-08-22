@@ -17,18 +17,16 @@ Name=Daily Selfie
 Comment=Your DailySelfie App
 Terminal=false
 StartupWMClass=DailySelfie
-StartupNotify=false
-Exec= sh -c "{exec_cmd_desktop}"
-Icon= {icon_entry}
-Actions=startup;
 StartupNotify=true
-
+Exec={exec_cmd_desktop}
+Icon={icon_entry}
+Actions=startup;
 
 
 [Desktop Action startup]
 Name=Retake Startup Window
-Exec= sh -c "{exec_cmd_startup}"
-Icon= {icon_entry}
+Exec={exec_cmd_startup}
+Icon={icon_entry}
 StartupNotify=true
 
 """
@@ -61,8 +59,8 @@ def enable_desktop_entry(paths) -> None:
     app_entry = paths.project_root / "DailySelfie.py"
     icon_entry = paths.project_root / "gui" / "assets" / "icons" / "app.svg"
 
-    exec_cmd_desktop = f'"{python_exe}" "{app_entry}"'
-    exec_cmd_startup = f'"{python_exe}" "{app_entry}" --start-up --allow-retake'
+    exec_cmd_desktop = f'sh -c \'"{python_exe}" "{app_entry}"\''
+    exec_cmd_startup = f'sh -c \'"{python_exe}" "{app_entry}" --start-up --allow-retake\''
 
     desktop_content = DESKTOP_TEMPLATE.format(exec_cmd_desktop=exec_cmd_desktop, exec_cmd_startup=exec_cmd_startup, icon_entry = icon_entry)
 
