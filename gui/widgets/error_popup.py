@@ -24,7 +24,7 @@ class ErrorToast(QDialog):
 
         # 1. Main Layout
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(15, 15, 15, 15)
+        main_layout.setContentsMargins(6, 6, 6, 6)
 
         # 2. The Visual Container (The Card)
         self.container = QFrame()
@@ -58,8 +58,8 @@ class ErrorToast(QDialog):
             QLabel#Message {{
                 color: #CCCCCC;
                 font-size: 13px;
-                margin-top: 4px;
-                margin-bottom: 12px;
+                margin-top: 0px;
+                margin-bottom: 6px;
             }}
             /* Action Buttons */
             QPushButton {{
@@ -67,7 +67,7 @@ class ErrorToast(QDialog):
                 color: #B0B0B0;
                 border: 1px solid #333;
                 border-radius: 6px;
-                padding: 6px 12px;
+                padding: 4px 12px;
                 font-size: 12px;
             }}
             QPushButton:hover {{
@@ -100,7 +100,7 @@ class ErrorToast(QDialog):
 
         # 4. Content Layout
         content_layout = QVBoxLayout(self.container)
-        content_layout.setContentsMargins(16, 16, 16, 16)
+        content_layout.setContentsMargins(12, 12, 12, 12)
         content_layout.setSpacing(4)
         
         # Header
@@ -108,22 +108,29 @@ class ErrorToast(QDialog):
         lbl_title.setObjectName("Title")
         content_layout.addWidget(lbl_title)
 
-        # Message
-        lbl_msg = QTextEdit(message)
-        lbl_msg.setStyleSheet("""QTextEdit {
-                background-color: #1A1A1A;
-                border: 2px solid transparent;
-                border-radius: 8px;
-                padding: 8px;
-                color: #E0E0E0;
-            }
-            QTextEdit:focus {
-                border: 2px solid #333333;
-                background-color: #1F1F1F;
-            }
-        """)
+        # Message body: compact word-wrapped label for short messages;
+        # read-only QTextEdit only when a traceback needs a copy affordance.
+        if traceback:
+            lbl_msg = QTextEdit(message)
+            lbl_msg.setReadOnly(True)
+            lbl_msg.setStyleSheet("""QTextEdit {
+                    background-color: #1A1A1A;
+                    border: 2px solid transparent;
+                    border-radius: 8px;
+                    padding: 8px;
+                    color: #E0E0E0;
+                }
+                QTextEdit:focus {
+                    border: 2px solid #333333;
+                    background-color: #1F1F1F;
+                }
+            """)
+        else:
+            lbl_msg = QLabel(message)
+            lbl_msg.setWordWrap(True)
+            lbl_msg.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            lbl_msg.setMinimumWidth(220)  # keep short messages on one line
         lbl_msg.setObjectName("Message")
-        lbl_msg.setReadOnly(True)
         lbl_msg.setMaximumWidth(320)
         content_layout.addWidget(lbl_msg)
 

@@ -402,6 +402,7 @@ class SliderRow(QWidget):
         self.slider.setMaximum(int(maximum))
         self.slider.setValue(int(value))
         self.slider.setMinimumWidth(200)
+        self.slider.setFixedHeight(28)  # >= 20px handle bbox + 4px breathing room
         self.slider.setCursor(Qt.PointingHandCursor)
         self.slider.valueChanged.connect(self._on_value_changed)
 
@@ -443,19 +444,22 @@ class SliderRow(QWidget):
         """)
         self.slider.setStyleSheet(f"""
             QSlider::groove:horizontal {{
+                subcontrol-position: center;
                 height: 6px;
                 border-radius: 3px;
                 background-color: {v['surface_container_highest']};
             }}
             QSlider::sub-page:horizontal {{
+                subcontrol-position: center;
                 height: 6px;
                 border-radius: 3px;
                 background-color: {v['primary']};
             }}
             QSlider::handle:horizontal {{
-                width: 18px;
+                width: 16px;
+                height: 16px;
                 margin: -7px 0;
-                border-radius: 9px;
+                border-radius: 10px;
                 background-color: {v['on_primary']};
                 border: 2px solid {v['primary']};
             }}
@@ -1105,7 +1109,7 @@ class SettingsPage(QWidget):
             QPushButton#ThemeCard {{
                 background-color: {v['surface_container_high']};
                 color: {v['on_surface_variant']};
-                border: 1px solid {v['outline_variant']};
+                border: 2px solid transparent;
                 border-radius: 12px;
                 padding: 14px 8px;
                 font-size: 12px;
@@ -1113,7 +1117,7 @@ class SettingsPage(QWidget):
             }}
             QPushButton#ThemeCard:hover {{
                 background-color: {v['surface_container_highest']};
-                border: 1px solid {v['outline']};
+                border: 2px solid {v['outline']};
                 color: {v['on_surface']};
             }}
             QPushButton#ThemeCard:checked {{

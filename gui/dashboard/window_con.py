@@ -108,19 +108,11 @@ class DashboardShell(QMainWindow):
         self.resize(width, height)
         self.setMinimumSize(1100, 620)
 
-        vars = theme_vars()
-
         # 1. Main Container (Rounded, Dark)
         self._container = QWidget(self)
         self.setCentralWidget(self._container)
         self._container.setObjectName("container")
-        self._container.setStyleSheet(f"""
-            QWidget#container {{
-                background-color: {vars["background"]};
-                border: 2px solid {vars["outline_variant"]};
-                border-radius: 12px;
-            }}
-        """)
+        self._container.setStyleSheet(self._container_stylesheet())
 
         # Main Top Bar
         self.root_layout = QVBoxLayout(self._container)
@@ -155,6 +147,90 @@ class DashboardShell(QMainWindow):
         # --- Resize Grips --- #
         self._grips = []
         self._setup_resize_grips()
+
+        controller = getattr(theme_vars(), "_controller", None)
+        if controller is not None:
+            controller.themeChanged.connect(self.apply_theme)
+
+    # --- Theme Methods --- #
+
+    def _container_stylesheet(self):
+        vars = theme_vars()
+        maximized = self._is_maximized_custom or self.isMaximized()
+        radius = "0px" if maximized else "12px"
+        return f"""
+            QWidget#container {{
+                background-color: {vars["background"]};
+                border: 2px solid {vars["outline_variant"]};
+                border-radius: {radius};
+            }}
+        """
+
+    def _control_styles(self):
+        var = theme_vars()
+        btn_style = f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {var["on_surface"]};
+                border: 2px solid {var["outline_variant"]}; 
+                border-radius: 10px;
+                font-weight: bold;
+                font-size: 14px;
+            }}
+            QPushButton:hover {{
+                color: {var["on_surface_variant"]};
+
+                border: 2px solid {var["outline"]};
+            }}
+            QPushButton:pressed {{
+                background-color: {var["outline_variant"]};
+            }}
+        """
+
+        btn_close_style = f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {var["on_surface_variant"]};
+                border: 2px solid {var["outline_variant"]};
+                border-radius:10px;
+                font-weight: bold;
+                font-size: 14px;
+            }}
+            QPushButton:hover {{
+                border: 2px solid {var["error"]};
+                color: {var["error"]};
+            }}
+            QPushButton:pressed {{
+                background-color: {var["error_container"]};
+                color: {var["inverse_on_surface"]};
+            }}
+        """
+
+        title_style = f"""
+            QLabel {{
+                color: {var["on_surface"]};
+                font-size: 14px;
+                font-weight: 600;
+            }}
+        """
+        return btn_style, btn_close_style, title_style
+
+    def apply_theme(self):
+        """Regenerate chrome stylesheets from the current theme, honoring the
+        maximized radius state (keeps the .replace() radius mechanism valid)."""
+        try:
+            self._container.setStyleSheet(self._container_stylesheet())
+            btn_style, btn_close_style, title_style = self._control_styles()
+            if getattr(self, "btn_min", None) is not None:
+                self.btn_min.setStyleSheet(btn_style)
+            if getattr(self, "btn_max", None) is not None:
+                self.btn_max.setStyleSheet(btn_style)
+            if getattr(self, "btn_close", None) is not None:
+                self.btn_close.setStyleSheet(btn_close_style)
+            if getattr(self, "_title_lbl", None) is not None:
+                self._title_lbl.setStyleSheet(title_style)
+        except RuntimeError:
+            pass
 
     # --- Helper Methods --- #
 
@@ -195,76 +271,32 @@ class DashboardShell(QMainWindow):
                 self._drag_pos = event.globalPosition().toPoint()
 
     def _add_window_controls(self):
-        var = theme_vars() 
-        btn_style = f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {var["on_surface"]};
-                border: 2px solid {var["outline_variant"]}; 
-                border-radius: 10px;
-                font-weight: bold;
-                font-size: 14px;
-            }}
-            QPushButton:hover {{
-                color: {var["on_surface_variant"]};
+        btn_style, btn_close_style, title_style = self._control_styles()
 
-                border: 2px solid {var["outline"]};
-            }}
-            QPushButton:pressed {{
-                background-color: {var["outline_variant"]};
-            }}
-        """
-
-        btn_close_style = f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {var["on_surface_variant"]};
-                border: 2px solid {var["outline_variant"]};
-                border-radius:10px;
-                font-weight: bold;
-                font-size: 14px;
-            }}
-            QPushButton:hover {{
-                border: 2px solid {var["error"]};
-                color: {var["error"]};
-            }}
-            QPushButton:pressed {{
-                background-color: {var["error_container"]};
-                color: {var["inverse_on_surface"]};
-            }}
-        """
-
-        btn_min = QPushButton("─")
-        btn_min.setFixedSize(32, 32)
-        btn_min.setStyleSheet(btn_style)
-        btn_min.clicked.connect(self._minimize_window)
+        self.btn_min = QPushButton("─")
+        self.btn_min.setFixedSize(32, 32)
+        self.btn_min.setStyleSheet(btn_style)
+        self.btn_min.clicked.connect(self._minimize_window)
 
         self.btn_max = QPushButton("☐")
         self.btn_max.setFixedSize(32, 32)
         self.btn_max.setStyleSheet(btn_style)
         self.btn_max.clicked.connect(self._toggle_maximize)
 
-        btn_close = QPushButton("✕")
-        btn_close.setFixedSize(32, 32)
-        btn_close.setStyleSheet(btn_close_style) 
-        btn_close.clicked.connect(self.close)
+        self.btn_close = QPushButton("✕")
+        self.btn_close.setFixedSize(32, 32)
+        self.btn_close.setStyleSheet(btn_close_style) 
+        self.btn_close.clicked.connect(self.close)
 
+        self._title_lbl = QLabel("Daily Selfie")
+        self._title_lbl.setStyleSheet(title_style)
 
-        title = QLabel("Daily Selfie")
-        title.setStyleSheet(f"""
-            QLabel {{
-                color: {var["on_surface"]};
-                font-size: 14px;
-                font-weight: 600;
-            }}
-        """)
-
-        self._top_bar_layout.insertWidget(0, title)
+        self._top_bar_layout.insertWidget(0, self._title_lbl)
         # self._top_bar_layout.addWidget(0, title)
 
-        self._top_bar_layout.addWidget(btn_min)
+        self._top_bar_layout.addWidget(self.btn_min)
         self._top_bar_layout.addWidget(self.btn_max)
-        self._top_bar_layout.addWidget(btn_close)
+        self._top_bar_layout.addWidget(self.btn_close)
 
     def _toggle_maximize(self, event=None):
         # On Linux, use native maximize (smooth animations built-in)

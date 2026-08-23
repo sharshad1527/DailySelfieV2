@@ -16,8 +16,6 @@ paths = get_app_paths("DailySelfie", ensure=False)
 ICONS_DIR = paths.project_root / "gui" /"assets" / "icons"
 # print(ICONS_DIR)
 
-vars = theme_vars()
-
 # Icons
 ico_menu = "menu.svg"
 ico_menu_open = "menu_open.svg" 
@@ -244,6 +242,13 @@ class NavButton(QWidget):
         super().paintEvent(event)
 
 
+    def set_icons(self, icon_normal, icon_checked, icon_hovered=None):
+        """Rebind themed icons (QIcons are baked per-theme; a plain
+        updateStyle() cannot pick up regenerated ones)."""
+        self.icon_normal = icon_normal
+        self.icon_checked = icon_checked
+        self.icon_hovered = icon_hovered if icon_hovered else icon_normal
+
     # Update the style of the navbutton
     def updateStyle(self):
         # Material 3 Navigation Rail Color Guidelines:
@@ -251,6 +256,8 @@ class NavButton(QWidget):
         # - Hovered: Container uses surface_container_high (state layer), Icon/Text uses on_surface
         # - Selected: Container uses secondary_container, Icon/Text uses on_secondary_container
         # - FAB/Action: Container uses primary_container, Icon uses on_primary_container
+
+        vars = theme_vars()
 
         styleMenu = f"""
                 QWidget#NavButton {{ 
@@ -407,7 +414,6 @@ class NavigationRail(QWidget):
     def __init__(self):
         super().__init__()
         
-        vars = theme_vars()
         self._is_collapsed = True # Defaultly Collapsed
         self._buttons = [] # Button List
     
@@ -458,7 +464,41 @@ class NavigationRail(QWidget):
         btn_dashboard.setChecked(True, animate=False) # Defaultly Selected
 
         self.applyCollapsedState(self._is_collapsed)
-        
+
+        controller = getattr(theme_vars(), "_controller", None)
+        if controller is not None:
+            controller.themeChanged.connect(self._on_theme_changed)
+
+    def _on_theme_changed(self):
+        self._apply_icon_theme()
+        # NavButtons hold references to the QIcons they were built with, so
+        # regenerated icons must be pushed into each button before restyling.
+        for btn in self._buttons:
+            icons = self._icon_set_for(btn)
+            if icons is None:
+                continue
+            try:
+                btn.set_icons(*icons)
+                # Checked buttons paint their fill from _fill_color; refresh it
+                # so the indicator matches the new theme without restarting the
+                # animation.
+                btn._updateFillColor()
+                if btn._fill_progress > 0:
+                    btn.update()
+                btn.updateStyle()
+            except RuntimeError:
+                pass
+
+    def _icon_set_for(self, btn):
+        """Current-theme icon triple (normal, checked, hovered) for a button."""
+        if getattr(btn, "_role", None) == ActionRole.MENU:
+            return (self.ico_menu, self.ico_menu_open, None)
+        return {
+            0: (self.ico_selfie, self.ico_selfie_filled, self.ico_selfie_hovered),
+            1: (self.ico_dashboard, self.ico_dashboard_filled, None),
+            2: (self.ico_calendar, self.ico_calendar_filled, None),
+            3: (self.ico_settings, self.ico_settings_filled, None),
+        }.get(getattr(btn, "page_id", None))
 
     # Toggle Collapsed State        
     def toggleCollapsedState(self):

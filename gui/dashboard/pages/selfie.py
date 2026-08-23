@@ -367,9 +367,9 @@ class SelfiePage(QWidget):
 
         popup = ErrorToast(self, level=level, message=msg, traceback=exc)
 
-        geo = self.geometry()
+        geo = self.window().geometry()
         x = geo.x() + (geo.width() - popup.width()) // 2
-        y = geo.y() + (geo.height() - popup.height()) // 2
+        y = geo.y() + (geo.height() - popup.height()) // 3
         popup.move(x, y)
         popup.show()
 
@@ -546,7 +546,6 @@ class SelfiePage(QWidget):
         self._review_mode = False
         self.shutter_bar.setReviewMode(False)
         self.ghost_slider.setEnabled(True)
-        self.ghost_slider.setStyleSheet("")
         if self._raw_ghost_image:
             self.ghost_lbl.show()
             self._update_ghost_visuals()
@@ -632,7 +631,6 @@ class SelfiePage(QWidget):
     def _start_countdown(self, seconds):
         self.ghost_lbl.hide() 
         self.ghost_slider.setEnabled(False)
-        self.ghost_slider.setStyleSheet("opacity: 0.0;")
         self.shutter_bar.setEnabled(False)
         self._countdown_remaining = seconds
         self.countdown_lbl.setText(str(seconds))
@@ -664,7 +662,6 @@ class SelfiePage(QWidget):
         self._review_mode = True  # Track that we're in review mode
         self.shutter_bar.setReviewMode(True)
         self.ghost_slider.setEnabled(False) 
-        self.ghost_slider.setStyleSheet("opacity: 0.3;")
 
     def _on_retake(self):
         # Delete existing photo for today first
@@ -719,7 +716,6 @@ class SelfiePage(QWidget):
         self.shutter_bar.show()
         self.shutter_bar.setReviewMode(False)
         self.ghost_slider.setEnabled(True)
-        self.ghost_slider.setStyleSheet("")
         if self._raw_ghost_image:
             self.ghost_lbl.show()
             self._update_ghost_visuals()

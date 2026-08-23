@@ -98,6 +98,16 @@ class GhostOpacitySlider(QWidget):
         track = self._track_rect()
         y = self._value_to_y()
 
+        enabled = self.isEnabled()
+
+        def state_color(key: str) -> "QColor":
+            c = v.qcolor(key)
+            if not enabled:
+                # Desaturate + fade to 30% alpha (Qt 6.10 dropped per-channel setters)
+                h, _s, l, a = c.getHslF()
+                c.setHslF(max(h, 0.0), 0.0, l, a * 0.3)
+            return c
+
         # 1. Define Shapes
         # ----------------
         # Instead of a capsule (width/2), we use a smaller fixed radius.
@@ -111,7 +121,7 @@ class GhostOpacitySlider(QWidget):
 
         # Track background
         p.setPen(Qt.NoPen)       
-        p.setBrush(v.qcolor("surface_container_highest"))
+        p.setBrush(state_color("surface_container_highest"))
         p.drawRoundedRect(track, radius, radius)
         p.restore()
  
@@ -126,7 +136,7 @@ class GhostOpacitySlider(QWidget):
         font.setPixelSize(24) 
         p.setFont(font)
         text = str(int(self._value))
-        p.setPen(v.qcolor("on_surface_variant"))
+        p.setPen(state_color("on_surface_variant"))
         p.drawText(text_rect, Qt.AlignCenter, text)
         p.restore()
 
@@ -143,7 +153,7 @@ class GhostOpacitySlider(QWidget):
             track.width(),
             fill_height + radius
         )
-        p.setBrush(v.qcolor("primary"))
+        p.setBrush(state_color("primary"))
         p.drawRect(fill_rect)
 
         # 5. Draw Text (Fill Color)
@@ -151,7 +161,7 @@ class GhostOpacitySlider(QWidget):
         # This draws the text *again*, but clipped to the fill rect
 
         p.setClipRect(fill_rect) 
-        p.setPen(v.qcolor("on_primary"))
+        p.setPen(state_color("on_primary"))
         p.setFont(font)
         p.drawText(text_rect, Qt.AlignCenter, text)
         p.restore()
@@ -183,7 +193,7 @@ class GhostOpacitySlider(QWidget):
         p.drawRoundedRect(gap_rect, (current_h + self.gap_size*2) // 2, (current_h + self.gap_size*2) // 2)
 
         # Draw the actual Handle
-        p.setBrush(v.qcolor("primary"))
+        p.setBrush(state_color("primary"))
         p.drawRoundedRect(handle_rect, current_h // 2, current_h // 2)
         p.restore()
 

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Tuple
 
 from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtGui import QPixmap, QIcon, QPainter, QMovie
+from PySide6.QtGui import QPixmap, QIcon, QPainter, QMovie, QColor
 from PySide6.QtWidgets import QFrame, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QPushButton, QSizePolicy
 
 from gui.theme.theme_vars import theme_vars
@@ -31,6 +31,16 @@ MOOD_GIF_MAP = {
     "Bad": "sad.gif",
     "Awful": "sosad.gif",
 }
+
+
+def _blend_over(top_hex: str, base_hex: str, alpha: float) -> str:
+    top = QColor(top_hex)
+    base = QColor(base_hex)
+    mix = lambda a, b: max(0, min(255, round(a * alpha + b * (1.0 - alpha))))
+    return QColor(mix(top.red(), base.red()),
+                  mix(top.green(), base.green()),
+                  mix(top.blue(), base.blue())).name()
+
 
 class TodaySelfieCard(QFrame):
     """
@@ -133,6 +143,8 @@ class TodaySelfieCard(QFrame):
         self.take_selfie_btn.setObjectName("TakeSelfieButton")
         self.take_selfie_btn.setCursor(Qt.PointingHandCursor)
         self.take_selfie_btn.setFixedHeight(48)
+        hover_bg = _blend_over(self._vars['primary'], self._vars['surface_container_low'], 0.85)
+        pressed_bg = _blend_over(self._vars['primary'], self._vars['surface_container_low'], 0.75)
         self.take_selfie_btn.setStyleSheet(f"""
             QPushButton#TakeSelfieButton {{
                 background-color: {self._vars['primary']};
@@ -144,12 +156,10 @@ class TodaySelfieCard(QFrame):
                 font-weight: 500;
             }}
             QPushButton#TakeSelfieButton:hover {{
-                background-color: {self._vars['primary']};
-                opacity: 0.92;
+                background-color: {hover_bg};
             }}
             QPushButton#TakeSelfieButton:pressed {{
-                background-color: {self._vars['primary']};
-                opacity: 0.85;
+                background-color: {pressed_bg};
             }}
         """)
         # Connect button to emit the signal
@@ -1068,9 +1078,9 @@ class TodaySelfieInfoBox(QFrame):
 
         popup = ErrorToast(self, level="ERROR", message=f"Failed to delete photo: {error}")
 
-        geo = self.geometry()
+        geo = self.window().geometry()
         x = geo.x() + (geo.width() - popup.width()) // 2
-        y = geo.y() + (geo.height() - popup.height()) // 2
+        y = geo.y() + (geo.height() - popup.height()) // 3
         popup.move(x, y)
         popup.show()
 
@@ -1190,7 +1200,12 @@ class DashboardPage(QWidget):
         self._root_layout.setSpacing(12)
         
         self._surface = None
+        self._refreshing = False
         self._build_surface()
+
+        controller = getattr(theme_vars(), "_controller", None)
+        if controller is not None:
+            controller.themeChanged.connect(self.refresh)
 
         self.setLayout(self._root_layout)
     
@@ -1214,5 +1229,11 @@ class DashboardPage(QWidget):
     def refresh(self):
         """Refresh the dashboard to show updated data (e.g., after a new photo is saved)."""
         print("Refreshing dashboard...")
-        self._build_surface()
+        if self._refreshing:
+            return
+        self._refreshing = True
+        try:
+            self._build_surface()
+        finally:
+            self._refreshing = False
 

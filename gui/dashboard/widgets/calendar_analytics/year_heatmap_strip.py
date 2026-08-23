@@ -133,7 +133,9 @@ class YearHeatmapStrip(QWidget):
                 p.setPen(pen)
                 p.setBrush(Qt.NoBrush)
                 first = self._cell_rect(self._hover_col, 0).adjusted(-2, -2, 2, 2)
-                last = self._cell_rect(self._hover_col, 6).adjusted(-2, 2, 2, 8)
+                last_cell = self._cell_rect(self._hover_col, 6)
+                bottom_space = max(0.0, self.height() - last_cell.bottom())
+                last = last_cell.adjusted(-2, 2, 2, min(float(PAD), bottom_space))
                 p.drawRoundedRect(first.united(last), 4, 4)
         p.end()
 
@@ -184,11 +186,16 @@ class YearHeatmapStrip(QWidget):
         hit = self._hit(event.position().toPoint())
         if hit and self._year is not None:
             col, _row = hit
-            d = self._date_for_cell(col, 3) or self._date_for_cell(col, 0)
-            if d is not None:
-                # Anchor on the ISO week's Thursday (row 3 = Thursday, Monday-first)
-                thursday = self._date_for_cell(col, 3)
-                if thursday is None:
-                    thursday = d
-                self.weekClicked.emit(thursday.isocalendar()[1], thursday)
+            # Anchor on the ISO week's Thursday (row 3 = Thursday, Monday-first);
+            # edge weeks whose Thursday is out-of-year fall back to the first
+            # in-year cell in the column.
+            anchor = self._date_for_cell(col, 3)
+            if anchor is None:
+                for r in range(7):
+                    d = self._date_for_cell(col, r)
+                    if d is not None:
+                        anchor = d
+                        break
+            if anchor is not None:
+                self.weekClicked.emit(anchor.isocalendar()[1], anchor)
         super().mousePressEvent(event)

@@ -352,7 +352,7 @@ class StartupWindow(BaseFramelessWindow):
 
         geo = self.geometry()
         x = geo.x() + (geo.width() - popup.width()) // 2
-        y = geo.y() + (geo.height() - popup.height()) // 2
+        y = geo.y() + (geo.height() - popup.height()) // 3
         popup.move(x, y)
         popup.show()
 
@@ -508,9 +508,8 @@ class StartupWindow(BaseFramelessWindow):
             self._start_countdown(delay)
 
     def _start_countdown(self, seconds):
-        self.ghost_lbl.hide() 
+        self.ghost_lbl.hide()
         self.ghost_slider.setEnabled(False)
-        self.ghost_slider.setStyleSheet("opacity: 0.0;")
         self.shutter_bar.setEnabled(False)
         self._countdown_remaining = seconds
         self.countdown_lbl.setText(str(seconds))
@@ -540,13 +539,11 @@ class StartupWindow(BaseFramelessWindow):
         self._stop_preview()
         self.ghost_lbl.hide()
         self.shutter_bar.setReviewMode(True)
-        self.ghost_slider.setEnabled(False) 
-        self.ghost_slider.setStyleSheet("opacity: 0.3;")
+        self.ghost_slider.setEnabled(False)
 
     def _on_retake(self):
         self.shutter_bar.setReviewMode(False)
         self.ghost_slider.setEnabled(True)
-        self.ghost_slider.setStyleSheet("")
         if self._raw_ghost_image:
             self.ghost_lbl.show()
             self._update_ghost_visuals()

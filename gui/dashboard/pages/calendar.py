@@ -177,6 +177,12 @@ def _secondary_button_style(v) -> str:
     """
 
 
+def _alpha_shift(hex_color: str, alpha_hex: str) -> str:
+    """8-digit hex shift of a #RRGGBB color for QSS hover/pressed states.
+    Qt ignores `opacity:` on widgets and parses 8-digit hex as #AARRGGBB."""
+    return f"#{alpha_hex}{hex_color.lstrip('#').upper()}"
+
+
 # -------------------------------------------------------------
 # Small shared components
 # -------------------------------------------------------------
@@ -386,7 +392,7 @@ class DayTile(QFrame):
         super().__init__(parent)
         self.index = index
         self.setFocusPolicy(Qt.NoFocus)
-        self.setMinimumSize(56, 36)
+        self.setMinimumSize(56, 32)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMouseTracking(True)
 
@@ -406,6 +412,8 @@ class DayTile(QFrame):
         self._notes_icon: Optional[QPixmap] = None
         self._reload_cb: Optional[Callable[[], None]] = None
         self._resize_gen = 0
+        self._base_y: Optional[int] = None
+        self._geom_gen = 0
 
         self._hover_anim = QPropertyAnimation(self, b"hoverProgress")
         self._lift_anim = QPropertyAnimation(self, b"pos")
@@ -540,6 +548,8 @@ class DayTile(QFrame):
         if not mt.is_motion_enabled():
             return
         if getattr(self, "_base_y", None) is None:
+            if not up:
+                return
             self._base_y = self.y()
         base_y = self._base_y
         self._lift_anim.stop()
@@ -585,6 +595,8 @@ class DayTile(QFrame):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._base_y = None
+        self._geom_gen += 1
         if self._thumb_path is not None:
             self._resize_gen += 1
             gen = self._resize_gen
@@ -1004,12 +1016,10 @@ class EmptyStateView(QWidget):
                 font-weight: 500;
             }}
             QPushButton#TakeSelfieButton:hover {{
-                background-color: {v['primary']};
-                opacity: 0.92;
+                background-color: {_alpha_shift(v['primary'], 'D9')};
             }}
             QPushButton#TakeSelfieButton:pressed {{
-                background-color: {v['primary']};
-                opacity: 0.85;
+                background-color: {_alpha_shift(v['primary'], 'BF')};
             }}
         """)
 
@@ -1397,12 +1407,11 @@ class DetailCard(QFrame):
 
     # ----- actions -----
     def _toast(self, level: str, message: str):
-        popup = ErrorToast(self, level=level, message=message)
-        geo = self.geometry()
-        x = geo.x() + (geo.width() - popup.width()) // 2
-        y = geo.y() + (geo.height() - popup.height()) // 2
-        popup.move(self.mapTo(self.window(), QPoint(x, y)))
-        popup.show()
+        page = self.parent()
+        while page is not None and not isinstance(page, CalendarPage):
+            page = page.parent()
+        if page is not None:
+            page._toast(level, message)
 
     def _on_save_clicked(self):
         eid = self._item.get("id")
@@ -1475,7 +1484,12 @@ class DetailCard(QFrame):
                 font-size: 11px;
                 font-weight: 500;
             }}
-            QPushButton:hover {{ opacity: 0.92; }}
+            QPushButton:hover {{
+                background-color: {_alpha_shift(v['primary'], 'D9')};
+            }}
+            QPushButton:pressed {{
+                background-color: {_alpha_shift(v['primary'], 'BF')};
+            }}
         """)
         self._edit_caption_lbl.setStyleSheet(f"""
             color: {v['on_surface_variant']};
@@ -1608,7 +1622,7 @@ class CalendarPage(QWidget):
         self._heat_card = QFrame()
         self._heat_card.setObjectName("HeatmapCard")
         heat_col = QVBoxLayout(self._heat_card)
-        heat_col.setContentsMargins(12, 12, 12, 12)
+        heat_col.setContentsMargins(12, 8, 12, 8)
         heat_col.setSpacing(0)
         self.heatmap = YearHeatmapStrip()
         self.heatmap.weekClicked.connect(
@@ -1864,6 +1878,7 @@ class CalendarPage(QWidget):
             return
         try:
             end_pos = tile.pos()
+            geom_gen = tile._geom_gen
             eff = QGraphicsOpacityEffect(tile)
             tile.setGraphicsEffect(eff)
             op_anim = QPropertyAnimation(eff, b"opacity", tile)
@@ -1884,7 +1899,8 @@ class CalendarPage(QWidget):
             def _finished():
                 try:
                     tile.setGraphicsEffect(None)
-                    tile.move(end_pos)
+                    if tile._geom_gen == geom_gen:
+                        tile.move(end_pos)
                 except RuntimeError:
                     pass
             group.finished.connect(_finished)
