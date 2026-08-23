@@ -38,7 +38,12 @@ class DashboardWindow(DashboardShell):
         # Store page references for signal connections
         self._selfie_page = SelfiePage()
         self._dashboard_page = DashboardPage()
-        self._calendar_page = CalendarPage()
+        self._calendar_page = CalendarPage(
+            theme_controller=theme_controller,
+            cfg=cfg,
+            config_path=config_path,
+            app_paths=app_paths,
+        )
         self._settings_page = SettingsPage(
             theme_controller=theme_controller,
             cfg=cfg,
@@ -61,9 +66,14 @@ class DashboardWindow(DashboardShell):
         # Cross-page communication
         # When selfie is saved, refresh dashboard to show new photo
         self._selfie_page.photoSaved.connect(self._dashboard_page.refresh)
-        
+        # When selfie is saved, refresh the calendar month + year viz
+        self._selfie_page.photoSaved.connect(self._calendar_page.refresh)
+
         # When dashboard's "take selfie" button is clicked, switch to selfie tab
         self._dashboard_page.takeSelfieRequested.connect(self._switch_to_selfie_tab)
+
+        # When calendar's zero-photos CTA / detail CTA is clicked, switch to selfie tab
+        self._calendar_page.takeSelfieRequested.connect(self._switch_to_selfie_tab)
         
         # When dashboard's "retake" button is clicked, switch to selfie tab and trigger retake
         self._dashboard_page.retakeRequested.connect(self._handle_retake_from_dashboard)

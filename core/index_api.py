@@ -57,6 +57,20 @@ class IndexAPI:
         self.index_db_path: Path = self.data_dir / DB_FILENAME
         self.audit_path: Path = self.data_dir / AUDIT_FILENAME
         self._indexer: Optional[Indexer] = None
+        self._change_listeners: List[callable] = []
+
+    def add_index_listener(self, callback) -> None:
+        """Register a zero-arg callback fired after successful record_capture /
+        record_deletion / update_meta operations."""
+        if callback not in self._change_listeners:
+            self._change_listeners.append(callback)
+
+    def _notify_changed(self) -> None:
+        for cb in list(self._change_listeners):
+            try:
+                cb()
+            except Exception:
+                pass
 
     def init(self) -> None:
         """Initialize the SQLite indexer (create DB if missing)."""
@@ -135,6 +149,7 @@ class IndexAPI:
         # Return final merged record
         db_row = idx.get_capture_by_id(entry["id"])
         merged = merge_db_and_meta(db_row, read_meta(self.data_dir, entry["id"]))
+        self._notify_changed()
         return merged
 
     def record_deletion(self, eid: str, reason: str = "delete") -> Dict[str, Any]:
@@ -179,6 +194,7 @@ class IndexAPI:
                 # non-fatal
                 pass
 
+        self._notify_changed()
         return {"id": eid, "ts": ts, "action": "delete", "reason": reason}
 
     def list_month(self, year: int, month: int) -> List[Dict[str, Any]]:
@@ -228,8 +244,78 @@ class IndexAPI:
                 idx.update_meta(eid, db_meta)
 
         # return merged
-        return self.get_item(eid)
+        merged = self.get_item(eid)
+        self._notify_changed()
+        return merged
 
+    def get_all_capture_dates(self) -> List[str]:
+        """
+        Public façade: sorted unique dates ('YYYY-MM-DD', UTC-bucketed) that
+        have captures (action='capture' only).
+        """
+        idx = self._ensure_indexer()
+        return idx.get_all_capture_dates()
+
+    def get_all_capture_stamps(self) -> List[str]:
+        """
+        Public façade: raw ts strings of every capture row (action='capture'),
+        ordered ascending. Callers convert to local time for day bucketing.
+        """
+        idx = self._ensure_indexer()
+        cur = idx._conn.execute(
+            "SELECT ts FROM captures WHERE action='capture' AND ts IS NOT NULL ORDER BY ts ASC"
+        )
+        return [row["ts"] for row in cur.fetchall()]
+
+    def get_moods_since(self, days_back: int) -> List[Dict[str, Any]]:
+        """
+        Public façade: [{'date': 'YYYY-MM-DD', 'mood': str}, ...] for captures
+        with a mood within the last N days (action='capture' only).
+        """
+        idx = self._ensure_indexer()
+        return idx.get_moods_since(days_back)
+
+    def get_capture_counts_by_date(self, year: int) -> Dict[str, int]:
+        """
+        Capture counts per day for a full year.
+
+        Returns {'YYYY-MM-DD': count} using SQL substr(ts,1,10) GROUP BY over
+        rows with action='capture'. Dates are UTC-bucketed (string compare).
+        """
+        idx = self._ensure_indexer()
+        start = f"{year:04d}-01-01"
+        end = f"{year + 1:04d}-01-01"
+        cur = idx._conn.execute(
+            """
+            SELECT substr(ts, 1, 10) AS date_str, COUNT(*) AS c
+            FROM captures
+            WHERE action='capture' AND substr(ts, 1, 10) >= ? AND substr(ts, 1, 10) < ?
+            GROUP BY date_str ORDER BY date_str ASC
+            """,
+            (start, end),
+        )
+        return {row["date_str"]: int(row["c"]) for row in cur.fetchall()}
+
+    def get_moods_between(self, start: str, end: str) -> List[Dict[str, Any]]:
+        """
+        Moods for captures whose UTC date bucket falls in [start, end]
+        inclusive ('YYYY-MM-DD' strings). Ordered by ts ascending so the LAST
+        entry per day is the latest capture's mood.
+
+        Returns [{'date': 'YYYY-MM-DD', 'mood': str}, ...]
+        """
+        idx = self._ensure_indexer()
+        cur = idx._conn.execute(
+            """
+            SELECT substr(ts, 1, 10) AS date_str, mood
+            FROM captures
+            WHERE action='capture' AND mood IS NOT NULL
+              AND substr(ts, 1, 10) >= ? AND substr(ts, 1, 10) <= ?
+            ORDER BY ts ASC
+            """,
+            (start, end),
+        )
+        return [{"date": row["date_str"], "mood": row["mood"]} for row in cur.fetchall()]
 
     def get_last_photo(self) -> Optional[Dict[str, Any]]:
         """

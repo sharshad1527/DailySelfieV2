@@ -476,7 +476,7 @@ class StreakSummaryWidget(QFrame):
         try:
             app_paths = get_app_paths("DailySelfie", ensure=True)
             api = get_api(app_paths)
-            dates = api._ensure_indexer().get_all_capture_dates()
+            dates = api.get_all_capture_dates()
             return calculate_streaks(dates)
         except Exception:
             return (0, 0, False)
@@ -652,14 +652,13 @@ class MoodSummaryWidget(QFrame):
         try:
             app_paths = get_app_paths("DailySelfie", ensure=True)
             api = get_api(app_paths)
-            indexer = api._ensure_indexer()
-            
+
             # Get moods for last 7 days
-            moods_7_raw = indexer.get_moods_since(7)
+            moods_7_raw = api.get_moods_since(7)
             moods_7 = self._count_moods(moods_7_raw)
             
             # Get moods for last 30 days
-            moods_30_raw = indexer.get_moods_since(30)
+            moods_30_raw = api.get_moods_since(30)
             moods_30 = self._count_moods(moods_30_raw)
             
             # Count unique days available in 30-day data

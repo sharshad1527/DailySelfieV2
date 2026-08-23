@@ -74,7 +74,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "allow_retake": False,
 
         # Default timer is 0 (Off)
-        "timer_duration": 0
+        "timer_duration": 0,
+
+        # Motion system gate (docs/design/motion-system.md)
+        "motion_enabled": True
     },
     "theme": {
     "name": "material-theme",
@@ -125,6 +128,13 @@ def _validate_behavior(cfg: Dict[str, Any]) -> None:
     if not isinstance(q, int) or not (1 <= q <= 100):
         raise ValueError("quality must be an integer between 1 and 100")
     behavior["quality"] = q
+
+    # Motion gate: bool coercion (accepts "true"/"1"/"on" style strings)
+    me = behavior.get("motion_enabled", True)
+    if isinstance(me, str):
+        behavior["motion_enabled"] = me.strip().lower() not in ("0", "false", "off", "no")
+    else:
+        behavior["motion_enabled"] = bool(me)
 
 
 def _deep_merge(default: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
