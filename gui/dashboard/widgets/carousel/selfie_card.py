@@ -120,9 +120,12 @@ class SelfieCard(QWidget):
         # Parse timestamp into display format (e.g., "Jan 15")
         self._date_text = self._parse_timestamp(ts)
         
-        # Load image if path is valid
+        # Load image if path is valid (tagged with the widget's device pixel
+        # ratio so painting stays sharp on HiDPI screens)
         if image_path and Path(image_path).exists():
             self._pixmap = QPixmap(image_path)
+            if not self._pixmap.isNull():
+                self._pixmap.setDevicePixelRatio(self.devicePixelRatioF())
             self._is_placeholder = False
         else:
             self._pixmap = QPixmap()
@@ -189,9 +192,12 @@ class SelfieCard(QWidget):
         
         Note: Uses QRectF for both target and source to avoid
         sub-pixel rounding artifacts (fixes "white line" bug).
+        All math is in logical units; the pixmap's devicePixelRatio
+        provides the extra pixels on HiDPI screens.
         """
-        img_width = self._pixmap.width()
-        img_height = self._pixmap.height()
+        pixmap_dpr = float(self._pixmap.devicePixelRatio()) or 1.0
+        img_width = self._pixmap.width() / pixmap_dpr
+        img_height = self._pixmap.height() / pixmap_dpr
         
         # Calculate scale to cover entire card (cover-fit)
         base_scale = max(card_width / img_width, card_height / img_height)

@@ -8,6 +8,9 @@ from PySide6.QtGui import QPixmap, QIcon, QPainter, QMovie, QColor
 from PySide6.QtWidgets import QFrame, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QPushButton, QSizePolicy
 
 from gui.theme.theme_vars import theme_vars
+from gui.widgets.lift_mixin import LiftMixin
+from gui.widgets.motion import install_motion_wrapper
+from gui.widgets.pixmap_utils import active_dpr, recolored_icon, rounded_corners, scaled_cover_crop
 from core.storage import last_image_for_date, delete_path
 from core.paths import get_app_paths
 from core.index_api import get_api
@@ -42,14 +45,17 @@ def _blend_over(top_hex: str, base_hex: str, alpha: float) -> str:
                   mix(top.blue(), base.blue())).name()
 
 
-class TodaySelfieCard(QFrame):
+class TodaySelfieCard(LiftMixin, QFrame):
     """
     Primary dashboard card showing today's selfie (image fills the card).
     Emits image_resized signal with the displayed image height.
     """
     image_resized = Signal(int)  # Emits the displayed image height
     takeSelfieRequested = Signal()  # Emitted when "Take selfie" button is clicked
-    
+    # C1 image-card variant: no lift movement; hover swaps the stylesheet
+    # border outline_variant→outline to match the painted photo border.
+    LIFT_IMAGE_CARD = True
+
     def __init__(self):
         super().__init__()
         self._vars = theme_vars()
@@ -66,6 +72,7 @@ class TodaySelfieCard(QFrame):
         self.setStyleSheet(f"""
             QFrame#TodaySelfieCard {{
                 background-color: {self._vars['surface_container_low']};
+                border: 1px solid {self._vars['outline_variant']};
                 border-radius: 16px;
             }}
         """)
@@ -77,6 +84,7 @@ class TodaySelfieCard(QFrame):
         self._content_widget = None
 
         self._check_today_selfie()
+        self.init_lift()
 
     def _check_today_selfie(self):
         """Check if today's selfie exists and set the appropriate state."""
@@ -185,28 +193,9 @@ class TodaySelfieCard(QFrame):
 
     def _create_colored_icon(self, icon_name: str, qcolor):
         """
-        Loads an SVG and repaints it with the given QColor.
+        Loads an SVG and repaints it with the given QColor (HiDPI-aware).
         """
-        path = ICONS_DIR / icon_name
-        if not path.exists():
-            return QIcon()
-
-        pixmap = QPixmap(str(path))
-        if pixmap.isNull():
-            return QIcon()
-
-        colored_pixmap = QPixmap(pixmap.size())
-        colored_pixmap.fill(Qt.transparent)
-
-        painter = QPainter(colored_pixmap)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform)
-        painter.drawPixmap(0, 0, pixmap)
-        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
-        painter.fillRect(colored_pixmap.rect(), qcolor)
-        painter.end()
-
-        return QIcon(colored_pixmap)
+        return recolored_icon(ICONS_DIR / icon_name, qcolor, active_dpr(self))
 
     def _create_rounded_pixmap(self, pixmap: QPixmap, radius: int) -> QPixmap:
         """
@@ -260,29 +249,34 @@ class TodaySelfieCard(QFrame):
         return getattr(self, '_image_path', None) is not None
     
     def _create_bordered_rounded_pixmap(self, pixmap: QPixmap, radius: int, border_width: int, border_color) -> QPixmap:
-        """Create a pixmap with rounded corners and a border."""
+        """Create a pixmap with rounded corners and a border (dpr-aware)."""
         from PySide6.QtGui import QPainterPath, QPen
-        
-        total_size = pixmap.size() + QSize(border_width * 2, border_width * 2)
+
+        dpr = float(pixmap.devicePixelRatio()) or 1.0
+        bw_dev = round(border_width * dpr)
+        total_size = QSize(pixmap.width() + bw_dev * 2, pixmap.height() + bw_dev * 2)
         result = QPixmap(total_size)
+        result.setDevicePixelRatio(dpr)
         result.fill(Qt.transparent)
-        
+
         painter = QPainter(result)
         painter.setRenderHint(QPainter.Antialiasing)
-                
-        # Draw image inside
+
+        # Draw image inside (logical coordinates; pixmap carries its own dpr)
+        logical_w = pixmap.width() / dpr
+        logical_h = pixmap.height() / dpr
         inner_path = QPainterPath()
         inner_path.addRoundedRect(border_width, border_width, 
-                                  pixmap.width(), pixmap.height(), 
+                                  logical_w, logical_h, 
                                   radius - border_width/2, radius - border_width/2)
         painter.setClipPath(inner_path)
-        painter.drawPixmap(border_width, border_width, pixmap)
+        painter.drawPixmap(round(border_width), round(border_width), pixmap)
         painter.end()
         
         return result
     
     def _update_selfie_image(self):
-        """Update selfie image to fill the card completely."""
+        """Update selfie image to fill the card completely (dpr-aware)."""
         if not self._image_path:
             return
             
@@ -296,21 +290,13 @@ class TodaySelfieCard(QFrame):
         
         if card_width < 100 or card_height < 100:
             return  # Card not properly sized yet
-        
+
+        dpr = self.devicePixelRatioF()
         pixmap = QPixmap(str(self._image_path))
         if not pixmap.isNull():
-            # Scale to fill the available space while keeping aspect ratio
-            scaled = pixmap.scaled(
-                card_width, card_height,
-                Qt.KeepAspectRatioByExpanding,
-                Qt.SmoothTransformation
-            )
-            
-            # Crop to exactly fit the card if image is larger
-            if scaled.width() > card_width or scaled.height() > card_height:
-                x_offset = (scaled.width() - card_width) // 2
-                y_offset = (scaled.height() - card_height) // 2
-                scaled = scaled.copy(x_offset, y_offset, card_width, card_height)
+            # Scale to fill the available space while keeping aspect ratio,
+            # then crop — all in device pixels so HiDPI stays sharp
+            scaled = scaled_cover_crop(pixmap, card_width, card_height, dpr)
             
             # Apply rounded corners and border
             bordered_pixmap = self._create_bordered_rounded_pixmap(
@@ -320,7 +306,7 @@ class TodaySelfieCard(QFrame):
             self.selfie_label.setPixmap(bordered_pixmap)
             
             # Emit height signal for info box
-            image_height = bordered_pixmap.height() + PADDING * 2
+            image_height = round(bordered_pixmap.height() / dpr) + PADDING * 2
             if image_height != self._current_image_height:
                 self._current_image_height = image_height
                 self.image_resized.emit(image_height)
@@ -331,7 +317,7 @@ class TodaySelfieCard(QFrame):
         if self._image_path:
             self._update_selfie_image()
 
-class StreakSummaryWidget(QFrame):
+class StreakSummaryWidget(LiftMixin, QFrame):
     """
     Read-only summary showing current and longest streak with status icon.
     """
@@ -458,28 +444,12 @@ class StreakSummaryWidget(QFrame):
             record_row.addWidget(record_label)
             record_row.addStretch()
             layout.addLayout(record_row)
-    
+
+        self.init_lift()
+
     def _create_colored_icon(self, icon_name: str, qcolor):
-        """Loads an SVG and repaints it with the given QColor."""
-        path = ICONS_DIR / icon_name
-        if not path.exists():
-            return QIcon()
-
-        pixmap = QPixmap(str(path))
-        if pixmap.isNull():
-            return QIcon()
-
-        colored_pixmap = QPixmap(pixmap.size())
-        colored_pixmap.fill(Qt.transparent)
-
-        painter = QPainter(colored_pixmap)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.drawPixmap(0, 0, pixmap)
-        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
-        painter.fillRect(colored_pixmap.rect(), qcolor)
-        painter.end()
-
-        return QIcon(colored_pixmap)
+        """Loads an SVG and repaints it with the given QColor (HiDPI-aware)."""
+        return recolored_icon(ICONS_DIR / icon_name, qcolor, active_dpr(self))
     
     def _get_streaks(self) -> Tuple[int, int, bool]:
         """Fetch dates from DB and calculate streaks."""
@@ -492,7 +462,7 @@ class StreakSummaryWidget(QFrame):
             return (0, 0, False)
 
 
-class MoodSummaryWidget(QFrame):
+class MoodSummaryWidget(LiftMixin, QFrame):
     """
     Widget showing mood summary for last 7 days and 30 days.
     Displays mood distribution with GIF icons and counts.
@@ -567,6 +537,8 @@ class MoodSummaryWidget(QFrame):
         else:
             section_title = "Last 30 days"
         self._build_mood_section(layout, section_title, moods_30, days_available)
+
+        self.init_lift()
 
     def _build_mood_section(self, parent_layout: QVBoxLayout, title: str, mood_counts: dict, total_days: int):
         """Build a section showing mood distribution."""
@@ -692,7 +664,7 @@ class MoodSummaryWidget(QFrame):
         return counts
 
 
-class TodaySelfieInfoBox(QFrame):
+class TodaySelfieInfoBox(LiftMixin, QFrame):
     """
     Info box showing mood, note, and retake button for today's selfie.
     Placed between selfie card and side column.
@@ -726,32 +698,16 @@ class TodaySelfieInfoBox(QFrame):
         
         # Connect to selfie card's height signal to sync heights
         self._selfie_card.image_resized.connect(self._on_image_resized)
+
+        self.init_lift()
     
     def _on_image_resized(self, height: int):
         """Signal received but we now use flexible sizing."""
         pass  # Height is now flexible, managed by layout
 
     def _create_colored_icon(self, icon_name: str, qcolor):
-        """Loads an SVG and repaints it with the given QColor."""
-        path = ICONS_DIR / icon_name
-        if not path.exists():
-            return QIcon()
-
-        pixmap = QPixmap(str(path))
-        if pixmap.isNull():
-            return QIcon()
-
-        colored_pixmap = QPixmap(pixmap.size())
-        colored_pixmap.fill(Qt.transparent)
-
-        painter = QPainter(colored_pixmap)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.drawPixmap(0, 0, pixmap)
-        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
-        painter.fillRect(colored_pixmap.rect(), qcolor)
-        painter.end()
-
-        return QIcon(colored_pixmap)
+        """Loads an SVG and repaints it with the given QColor (HiDPI-aware)."""
+        return recolored_icon(ICONS_DIR / icon_name, qcolor, active_dpr(self))
 
     def _build_content(self):
         """Build the info box content based on selfie state."""
@@ -1194,8 +1150,11 @@ class DashboardPage(QWidget):
     def __init__(self):
         super().__init__()
         vars = theme_vars()
-        
-        self._root_layout = QVBoxLayout()
+
+        # Incoming-only page transitions animate this wrapper (motion-system.md)
+        self._motion_wrapper = install_motion_wrapper(self)
+
+        self._root_layout = QVBoxLayout(self._motion_wrapper)
         self._root_layout.setContentsMargins(12, 12, 12, 12)
         self._root_layout.setSpacing(12)
         
@@ -1206,8 +1165,6 @@ class DashboardPage(QWidget):
         controller = getattr(theme_vars(), "_controller", None)
         if controller is not None:
             controller.themeChanged.connect(self.refresh)
-
-        self.setLayout(self._root_layout)
     
     def _build_surface(self):
         """Build or rebuild the dashboard surface."""

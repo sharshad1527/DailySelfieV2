@@ -51,6 +51,7 @@ from core.logging import get_logger
 from core.paths import AppPaths, get_app_paths
 from gui.theme.theme_vars import theme_vars
 from gui.widgets.error_popup import ErrorToast
+from gui.widgets.motion import install_motion_wrapper
 
 
 logger = get_logger("settings_page")
@@ -699,7 +700,9 @@ class SettingsPage(QWidget):
         self._probed_once = False
         self._teardown_generation = 0
 
-        root = QVBoxLayout(self)
+        # Incoming-only page transitions animate this wrapper (motion-system.md)
+        self._motion_wrapper = install_motion_wrapper(self)
+        root = QVBoxLayout(self._motion_wrapper)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
@@ -917,9 +920,12 @@ class SettingsPage(QWidget):
         icon_lbl = QLabel()
         icon_path = Path(self.app_paths.project_root) / "gui" / "assets" / "icons" / "app.png"
         if icon_path.exists():
+            dpr = self.devicePixelRatioF()
             pix = QPixmap(str(icon_path)).scaled(
-                48, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                round(48 * dpr), round(48 * dpr), Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
             )
+            pix.setDevicePixelRatio(dpr)
             icon_lbl.setPixmap(pix)
         icon_lbl.setFixedSize(48, 48)
         top_row.addWidget(icon_lbl)

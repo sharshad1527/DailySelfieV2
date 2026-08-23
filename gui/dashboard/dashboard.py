@@ -1,10 +1,11 @@
 # gui/dashboard/dashboard.py
 import sys
 from PySide6.QtWidgets import (
-    QStackedWidget, QApplication, QHBoxLayout
+    QStackedWidget, QApplication, QHBoxLayout, QGraphicsOpacityEffect
 )
-from PySide6.QtCore import QEvent
+from PySide6.QtCore import QEvent, QPoint, QPropertyAnimation, QParallelAnimationGroup
 from gui.theme.theme_vars import theme_vars 
+from gui.theme import motion_tokens as mt
 
 try:
     from gui.dashboard.window_con import DashboardShell
@@ -22,6 +23,11 @@ class DashboardWindow(DashboardShell):
         super().__init__()
         vars = theme_vars()
         self._pages = QStackedWidget()
+        # Held refs for the incoming-only page transition (retarget-not-queue)
+        self._page_switch_anim = None
+        self._page_switch_effect = None
+        self._page_switch_target = None
+        self._page_switch_endpos = None
         self._app_focused = True  # Track app focus state
 
         self._toggle_maximize()
@@ -83,7 +89,75 @@ class DashboardWindow(DashboardShell):
 
     def _onPageSelected(self, page_id: int):
         """Handle page selection from navigation rail."""
-        self._pages.setCurrentIndex(page_id)
+        self._switch_page(page_id)
+
+    def _switch_page(self, new_index: int):
+        """Instant index switch + direction-aware incoming-wrapper transition
+        (motion-system.md): wrapper pos.x sign*16→0 ∥ opacity 0→1, 200ms
+        OutCubic; effect detached in finished; retargets on rapid clicks;
+        gated on behavior.motion_enabled (off = instant)."""
+        old_index = self._pages.currentIndex()
+        if new_index == old_index or not (0 <= new_index < self._pages.count()):
+            return
+        self._pages.setCurrentIndex(new_index)
+        if not mt.is_motion_enabled():
+            return
+        wrap = getattr(self._pages.widget(new_index), "_motion_wrapper", None)
+        if wrap is None:
+            return
+        # Retarget: stop the held pair and settle its wrapper explicitly —
+        # Qt only emits finished() at natural end, never on mid-flight stop().
+        prev = self._page_switch_anim
+        if prev is not None:
+            try:
+                prev.stop()
+                if self._page_switch_target is not None:
+                    self._page_switch_target.move(self._page_switch_endpos)
+                    self._page_switch_target.setGraphicsEffect(None)
+            except RuntimeError:
+                pass
+            self._page_switch_anim = None
+            self._page_switch_effect = None
+            self._page_switch_target = None
+            self._page_switch_endpos = None
+        sign = 1 if new_index > old_index else -1
+        effect = QGraphicsOpacityEffect(wrap)
+        wrap.setGraphicsEffect(effect)
+        end_pos = wrap.pos()
+        wrap.move(end_pos.x() + sign * mt.slide_distance, end_pos.y())
+
+        pos_anim = QPropertyAnimation(wrap, b"pos", wrap)
+        pos_anim.setDuration(mt.duration_base)
+        pos_anim.setEasingCurve(mt.curve_enter)
+        pos_anim.setStartValue(wrap.pos())
+        pos_anim.setEndValue(end_pos)
+        opa_anim = QPropertyAnimation(effect, b"opacity", wrap)
+        opa_anim.setDuration(mt.duration_base)
+        opa_anim.setEasingCurve(mt.curve_enter)
+        opa_anim.setStartValue(0.0)
+        opa_anim.setEndValue(1.0)
+        group = QParallelAnimationGroup(wrap)
+        group.addAnimation(pos_anim)
+        group.addAnimation(opa_anim)
+
+        def _detach_effect():
+            try:
+                wrap.move(end_pos)
+                wrap.setGraphicsEffect(None)
+            except RuntimeError:
+                pass
+            self._page_switch_effect = None
+            if self._page_switch_anim is group:
+                self._page_switch_anim = None
+                self._page_switch_target = None
+                self._page_switch_endpos = None
+
+        group.finished.connect(_detach_effect)
+        self._page_switch_anim = group
+        self._page_switch_effect = effect
+        self._page_switch_target = wrap
+        self._page_switch_endpos = end_pos
+        group.start()
     
     def _select_nav_button_by_page_id(self, page_id: int):
         """Select navigation rail button by page_id."""
@@ -94,7 +168,7 @@ class DashboardWindow(DashboardShell):
     
     def _switch_to_selfie_tab(self):
         """Switch to selfie tab and update navigation rail."""
-        self._pages.setCurrentIndex(0)  # Selfie is at index 0
+        self._switch_page(0)  # Selfie is at index 0
         # Update navigation rail to select selfie button (page_id=0)
         self._select_nav_button_by_page_id(0)
         # Explicitly activate the selfie page (showEvent may not fire for stacked widgets)
@@ -103,7 +177,7 @@ class DashboardWindow(DashboardShell):
     def _handle_retake_from_dashboard(self):
         """Handle retake request from dashboard - switch to selfie tab and trigger retake."""
         # Switch to selfie tab (but don't activate - we'll call retake instead)
-        self._pages.setCurrentIndex(0)  # Selfie is at index 0
+        self._switch_page(0)  # Selfie is at index 0
         self._select_nav_button_by_page_id(0)
         # Trigger retake on the selfie page (this starts camera)
         self._selfie_page._on_retake()

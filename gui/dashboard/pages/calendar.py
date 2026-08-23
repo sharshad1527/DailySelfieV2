@@ -57,6 +57,8 @@ from core.storage import delete_path
 from gui.theme import motion_tokens as mt
 from gui.theme.theme_vars import theme_vars
 from gui.widgets.error_popup import ErrorToast
+from gui.widgets.motion import install_motion_wrapper
+from gui.widgets.pixmap_utils import active_dpr, recolored_icon, rounded_corners, scaled_cover_crop
 
 from gui.dashboard.pages.dashboard import MOOD_GIF_MAP
 from gui.dashboard.widgets.calendar_analytics.mood_legend import MoodLegend
@@ -83,49 +85,20 @@ NOTE_TRUNCATE = 35
 # -------------------------------------------------------------
 # Shared helpers (patterns copied from pages/dashboard.py)
 # -------------------------------------------------------------
-def _create_colored_icon(icon_name: str, qcolor: QColor) -> QIcon:
-    """Loads an SVG and repaints it with the given QColor."""
-    path = ICONS_DIR / icon_name
-    if not path.exists():
-        return QIcon()
-    pixmap = QPixmap(str(path))
-    if pixmap.isNull():
-        return QIcon()
-    colored_pixmap = QPixmap(pixmap.size())
-    colored_pixmap.fill(Qt.transparent)
-    painter = QPainter(colored_pixmap)
-    painter.setRenderHint(QPainter.Antialiasing)
-    painter.setRenderHint(QPainter.SmoothPixmapTransform)
-    painter.drawPixmap(0, 0, pixmap)
-    painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
-    painter.fillRect(colored_pixmap.rect(), qcolor)
-    painter.end()
-    return QIcon(colored_pixmap)
+def _create_colored_icon(icon_name: str, qcolor: QColor, dpr: Optional[float] = None) -> QIcon:
+    """Loads an SVG and repaints it with the given QColor (HiDPI-aware)."""
+    return recolored_icon(ICONS_DIR / icon_name, qcolor, active_dpr() if dpr is None else dpr)
 
 
-def _rounded_crop_pixmap(path: Optional[Path], w: int, h: int, radius: int) -> Optional[QPixmap]:
+def _rounded_crop_pixmap(path: Optional[Path], w: int, h: int, radius: int,
+                         dpr: float = 1.0) -> Optional[QPixmap]:
     """Crop-fill scaled rounded pixmap (TodaySelfieCard._update_selfie_image pattern)."""
     if not path or not path.exists():
         return None
     pixmap = QPixmap(str(path))
     if pixmap.isNull():
         return None
-    scaled = pixmap.scaled(w, h, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-    if scaled.width() > w or scaled.height() > h:
-        x_off = (scaled.width() - w) // 2
-        y_off = (scaled.height() - h) // 2
-        scaled = scaled.copy(x_off, y_off, w, h)
-    rounded = QPixmap(scaled.size())
-    rounded.fill(Qt.transparent)
-    painter = QPainter(rounded)
-    painter.setRenderHint(QPainter.Antialiasing)
-    painter.setRenderHint(QPainter.SmoothPixmapTransform)
-    clip = QPainterPath()
-    clip.addRoundedRect(0, 0, scaled.width(), scaled.height(), radius, radius)
-    painter.setClipPath(clip)
-    painter.drawPixmap(0, 0, scaled)
-    painter.end()
-    return rounded
+    return rounded_corners(scaled_cover_crop(pixmap, w, h, dpr), radius)
 
 
 def _utc_to_local(ts_value: str) -> Optional[datetime]:
@@ -245,7 +218,8 @@ class ThumbLabel(QLabel):
     def _reload(self):
         w = max(self.width(), 1)
         h = max(self.height(), 1)
-        pix = _rounded_crop_pixmap(self._image_path, w, h, self._radius)
+        pix = _rounded_crop_pixmap(self._image_path, w, h, self._radius,
+                                   self.devicePixelRatioF())
         if pix is not None:
             self.setText("")
             self.setPixmap(pix)
@@ -1556,7 +1530,9 @@ class CalendarPage(QWidget):
         self._current_year = today.year
         self._current_month = today.month
 
-        root = QVBoxLayout(self)
+        # Incoming-only page transitions animate this wrapper (motion-system.md)
+        self._motion_wrapper = install_motion_wrapper(self)
+        root = QVBoxLayout(self._motion_wrapper)
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(12)
 
@@ -1855,7 +1831,8 @@ class CalendarPage(QWidget):
                 return
             w = max(int(tile.width()) - 8, 8)
             h = max(int(tile.height()) - 8, 8)
-            pix = _rounded_crop_pixmap(tile._thumb_path, w, h, TILE_RADIUS)
+            pix = _rounded_crop_pixmap(tile._thumb_path, w, h, TILE_RADIUS,
+                                       tile.devicePixelRatioF())
             tile.apply_thumb(pix)
         except RuntimeError:
             pass  # tile destroyed (rapid paging)

@@ -27,6 +27,8 @@ from gui.startup.widgets.gif_button import GifButton
 from gui.startup.camera.preview import CameraPreviewThread
 from gui.qt_logging import QtSignalingHandler, install_qt_logger
 from gui.widgets.error_popup import ErrorToast
+from gui.widgets.motion import install_motion_wrapper
+from gui.widgets.pixmap_utils import active_dpr, recolored_icon, scaled_cover_crop
 
 # Theme 
 from gui.theme.theme_vars import theme_vars
@@ -53,6 +55,9 @@ class SelfiePage(QWidget):
         super().__init__()
 
         self.setContentsMargins(10,10,10,20)
+
+        # Incoming-only page transitions animate this wrapper (motion-system.md)
+        self._motion_wrapper = install_motion_wrapper(self)
 
         self._force_allow_retake = allow_retake
 
@@ -197,7 +202,7 @@ class SelfiePage(QWidget):
     # UI Building
     # ---------------------------------------------------------
     def _build_content_ui(self, initial_timer):
-        root = QHBoxLayout(self)
+        root = QHBoxLayout(self._motion_wrapper)
         root.setContentsMargins(0,0,0,0)
         root.setSpacing(16)
 
@@ -397,7 +402,7 @@ class SelfiePage(QWidget):
 
     def _process_image_for_display(self, source_image):
         """
-        Scales and rounds the corners of the image.
+        Scales and rounds the corners of the image (dpr-aware).
         Optimized to fail fast if dimensions are invalid.
         """
         container_w = self.preview_lbl.width()
@@ -409,17 +414,16 @@ class SelfiePage(QWidget):
         target_h = container_h - (margin * 2)
         if target_w <= 0: return None
 
-        # Scale
-        # Note: Optimization could be done here by caching the scaled pixmap
-        # if the container size hasn't changed, but for a live preview we need to redraw.
-        pix = QPixmap.fromImage(source_image)
-        scaled = pix.scaled(QSize(target_w, target_h), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-        
-        crop_x = (scaled.width() - target_w) // 2
-        crop_y = (scaled.height() - target_h) // 2
-        cropped = scaled.copy(crop_x, crop_y, target_w, target_h)
+        dpr = self.devicePixelRatioF()
 
-        final_pix = QPixmap(QSize(container_w, container_h))
+        # Scale + crop in device pixels so HiDPI stays sharp
+        pix = QPixmap.fromImage(source_image)
+        cropped = scaled_cover_crop(pix, target_w, target_h, dpr)
+
+        cw = max(1, round(container_w * dpr))
+        ch = max(1, round(container_h * dpr))
+        final_pix = QPixmap(cw, ch)
+        final_pix.setDevicePixelRatio(dpr)
         final_pix.fill(Qt.transparent)
         
         painter = QPainter(final_pix)
@@ -707,8 +711,10 @@ class SelfiePage(QWidget):
         from PySide6.QtWidgets import QSizePolicy
         if hasattr(self, '_toast_spacer'):
             self._toast_spacer.changeSize(0, 80, QSizePolicy.Minimum, QSizePolicy.Fixed)
-            if self.layout() and self.layout().count() > 2:
-                right_widget = self.layout().itemAt(2).widget()
+            # Real content layout lives on the motion wrapper (install_motion_wrapper)
+            root_layout = self._motion_wrapper.layout()
+            if root_layout and root_layout.count() > 2:
+                right_widget = root_layout.itemAt(2).widget()
                 if right_widget and right_widget.layout():
                     right_widget.layout().invalidate()
         
@@ -785,8 +791,9 @@ class SelfiePage(QWidget):
         self._metadata_panel = self._build_metadata_panel()
         
         # Find the right panel and add metadata panel
-        # The right panel is at index 2 in the root layout
-        root_layout = self.layout()
+        # The right panel is at index 2 of the motion wrapper's inner layout
+        # (self.layout() is the 1-item HBox holding only the wrapper)
+        root_layout = self._motion_wrapper.layout()
         if root_layout and root_layout.count() > 2:
             right_widget = root_layout.itemAt(2).widget()
             if right_widget:
@@ -1003,26 +1010,8 @@ class SelfiePage(QWidget):
         return panel
 
     def _create_colored_icon(self, icon_name: str, qcolor):
-        """Loads an SVG and repaints it with the given QColor."""
+        """Loads an SVG and repaints it with the given QColor (HiDPI-aware)."""
         mood_path = get_app_paths("DailySelfie", ensure=False)
         ICONS_DIR = mood_path.project_root / "gui" / "assets" / "icons"
-        path = ICONS_DIR / icon_name
-        if not path.exists():
-            return QIcon()
-
-        pixmap = QPixmap(str(path))
-        if pixmap.isNull():
-            return QIcon()
-
-        colored_pixmap = QPixmap(pixmap.size())
-        colored_pixmap.fill(Qt.transparent)
-
-        painter = QPainter(colored_pixmap)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.drawPixmap(0, 0, pixmap)
-        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
-        painter.fillRect(colored_pixmap.rect(), qcolor)
-        painter.end()
-
-        return QIcon(colored_pixmap)
+        return recolored_icon(ICONS_DIR / icon_name, qcolor, active_dpr(self))
 

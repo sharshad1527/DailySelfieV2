@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     )
 
 from gui.theme.theme_vars import theme_vars
+from gui.widgets.pixmap_utils import active_dpr, recolored_icon
 from core.paths import get_app_paths
 
 paths = get_app_paths("DailySelfie", ensure=False)
@@ -533,36 +534,10 @@ class NavigationRail(QWidget):
     # Create Colored Icon
     def _create_colored_icon(self, icon_name, qcolor):
         """
-        Loads an SVG and repaints it with the given QColor.
+        Loads an SVG and repaints it with the given QColor (HiDPI-aware).
         This fixes the issue where icons ignore CSS color properties.
         """
-        path = ICONS_DIR / icon_name
-        if not path.exists():
-            return QIcon()
-
-        # Load original
-        pixmap = QPixmap(str(path))
-        if pixmap.isNull():
-            return QIcon()
-
-        # Create a new transparent pixmap of the same size
-        colored_pixmap = QPixmap(pixmap.size())
-        colored_pixmap.fill(Qt.transparent)
-
-        # Paint
-        painter = QPainter(colored_pixmap)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform)
-        
-        # Draw the mask (original icon)
-        painter.drawPixmap(0, 0, pixmap)
-        
-        # Fill with color using SourceIn (keeps alpha, changes color)
-        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
-        painter.fillRect(colored_pixmap.rect(), qcolor)
-        painter.end()
-
-        return QIcon(colored_pixmap)
+        return recolored_icon(ICONS_DIR / icon_name, qcolor, active_dpr(self))
 
     # Apply Icon Theme
     def _apply_icon_theme(self):
