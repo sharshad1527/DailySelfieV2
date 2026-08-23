@@ -18,7 +18,7 @@ from gui.dashboard.pages.settings import SettingsPage
 from gui.dashboard.navigation_rail import NavigationRail
 
 class DashboardWindow(DashboardShell):
-    def __init__(self):
+    def __init__(self, theme_controller=None, cfg=None, config_path=None, app_paths=None):
         super().__init__()
         vars = theme_vars()
         self._pages = QStackedWidget()
@@ -39,7 +39,12 @@ class DashboardWindow(DashboardShell):
         self._selfie_page = SelfiePage()
         self._dashboard_page = DashboardPage()
         self._calendar_page = CalendarPage()
-        self._settings_page = SettingsPage()
+        self._settings_page = SettingsPage(
+            theme_controller=theme_controller,
+            cfg=cfg,
+            config_path=config_path,
+            app_paths=app_paths,
+        )
         
         # Use indices matching navigation rail page_ids: 0=selfie, 1=dashboard, 2=calendar, 3=settings
         self._pages.addWidget(self._selfie_page)      # index 0

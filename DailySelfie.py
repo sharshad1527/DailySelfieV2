@@ -431,7 +431,12 @@ def main(argv=None):
             except Exception:
                 pass
 
-        win = DashboardWindow()
+        win = DashboardWindow(
+            theme_controller=theme_controller,
+            cfg=cfg,
+            config_path=config_path,
+            app_paths=paths,
+        )
         win.show()
         return app.exec()
 
