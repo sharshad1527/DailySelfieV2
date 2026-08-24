@@ -16,11 +16,13 @@ Internally:
 """
 
 from __future__ import annotations
-from pathlib import Path
 
+from core.logging import get_logger
 from core.paths import get_app_paths
-from core.config import load_config, write_config, apply_config_to_paths, write_config_bootstrap
+from core.config import load_config, write_config, apply_config_to_paths
 from desktop_entry import enable_desktop_entry, disable_desktop_entry
+
+logger = get_logger("desktop_entry_manager")
 
 
 def set_desktop_entry(enabled: bool) -> None:
@@ -52,16 +54,15 @@ def set_desktop_entry(enabled: bool) -> None:
         disable_desktop_entry(paths)
         cfg["installation"]["create_desktop_entry"] = False
 
-    # Persist config
+    # Persist config (single write path; bootstrap writer is not used here)
     try:
         write_config(config_path, cfg)
-    except Exception as e:
-        print("Trying Again To Wrtie config")
-    else:
-        write_config_bootstrap(config_path, cfg)
-    
-    
-    
+    except Exception:
+        logger.exception(
+            "desktop_entry_config_write_failed",
+            extra={"meta": {"config_path": str(config_path)}},
+        )
+        raise
 
     state = "enabled" if enabled else "disabled"
-    print(f"Desktop {state} and configuration updated.")
+    logger.info(f"Desktop entry {state} and configuration updated.")

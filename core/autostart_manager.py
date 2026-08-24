@@ -16,11 +16,13 @@ Internally:
 """
 
 from __future__ import annotations
-from pathlib import Path
 
+from core.logging import get_logger
 from core.paths import get_app_paths
-from core.config import load_config, write_config, apply_config_to_paths, write_config_bootstrap
+from core.config import load_config, write_config, apply_config_to_paths
 from autostart import enable_autostart, disable_autostart
+
+logger = get_logger("autostart_manager")
 
 
 def set_autostart(enabled: bool) -> None:
@@ -52,16 +54,15 @@ def set_autostart(enabled: bool) -> None:
         disable_autostart(paths)
         cfg["installation"]["autostart"] = False
 
-    # Persist config
+    # Persist config (single write path; bootstrap writer is not used here)
     try:
         write_config(config_path, cfg)
-    except Exception as e:
-        print("Trying Again To Wrtie config")
-    else:
-        write_config_bootstrap(config_path, cfg)
-    
-    
-    
+    except Exception:
+        logger.exception(
+            "autostart_config_write_failed",
+            extra={"meta": {"config_path": str(config_path)}},
+        )
+        raise
 
     state = "enabled" if enabled else "disabled"
-    print(f"Autostart {state} and configuration updated.")
+    logger.info(f"Autostart {state} and configuration updated.")

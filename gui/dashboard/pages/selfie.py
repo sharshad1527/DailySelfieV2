@@ -12,12 +12,11 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QPixmap, QImage, QPainter, QPainterPath, QFont, QIcon, QMovie
 
 # Core
-from core.capture import commit_capture_from_bytes
+from core.capture import check_if_already_captured, commit_capture_from_bytes
 from core.index_api import get_api
 from core.logging import get_logger
 from core.config import ensure_config, apply_config_to_paths, write_config
 from core.paths import get_app_paths
-from core.storage import delete_last_image_for_date
 
 # GUI Components
 from gui.startup.window_con import BaseFramelessWindow
@@ -497,12 +496,9 @@ class SelfiePage(QWidget):
     def _check_today_photo_exists(self):
         """Check if today's photo exists. Returns path if exists, None otherwise."""
         try:
-            from datetime import datetime
-            from core.storage import last_image_for_date
-            photos_root = Path(self.paths.photos_root)  # Use correct photos_root
-            today = datetime.now()
-            today_path = last_image_for_date(photos_root, today)
-            if today_path and today_path.exists():
+            # Timezone-aware LOCAL-day lookup (UTC-named files) via capture core.
+            exists, today_path = check_if_already_captured(self.paths)
+            if exists and today_path and today_path.exists():
                 return today_path
         except Exception as e:
             print(f"Error checking today's photo: {e}")
@@ -605,7 +601,9 @@ class SelfiePage(QWidget):
             height=beh.get("height")
         )
         self._preview_thread.frame_ready.connect(self._update_preview)
-        self._preview_thread.error_occurred.connect(lambda e: print(f"Camera Error: {e}"))
+        self._preview_thread.error_occurred.connect(
+            lambda e: get_logger("gui.selfie").warning("Camera preview error: %s", e)
+        )
         self._preview_thread.start()
 
     def _stop_preview(self):
@@ -668,24 +666,9 @@ class SelfiePage(QWidget):
         self.ghost_slider.setEnabled(False) 
 
     def _on_retake(self):
-        # Delete existing photo for today first
-        from datetime import datetime
-        try:
-            photos_root = Path(self.paths.photos_root)  # Use correct photos_root from paths
-            today = datetime.now()
-            success, error, deleted_path = delete_last_image_for_date(photos_root, today)
-            if success and deleted_path:
-                print(f"Deleted existing photo: {deleted_path}")
-                # Also remove from index
-                try:
-                    selfie_id = deleted_path.stem
-                    self.index_api.record_deletion(selfie_id, reason="retake")
-                except Exception as e:
-                    print(f"Error removing from index: {e}")
-            elif error and error != 'no_image':
-                print(f"Error deleting photo: {error}")
-        except Exception as e:
-            print(f"Error during photo deletion: {e}")
+        # Non-destructive: nothing on disk or in the index is removed here.
+        # The previous photo is only retired inside commit_capture_from_bytes
+        # AFTER the replacement is safely written (swap-after-save).
         
         # Reset photo-saved state
         self._photo_saved = False

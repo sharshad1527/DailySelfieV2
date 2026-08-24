@@ -1,21 +1,65 @@
 # core/capture.py
 from __future__ import annotations
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
 
+
+# ---------------------------------------------------------
+# Helper: durability flush for a freshly written file
+# ---------------------------------------------------------
+def _fsync_file_and_dir(path: Path) -> None:
+    """Best-effort fsync of a saved file and its parent directory."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    dir_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
+
 # ---------------------------------------------------------
 # New Helper: Pre-check status
 # ---------------------------------------------------------
+def latest_photo_for_local_day(photos_root: Path) -> Optional[Path]:
+    """
+    Newest photo whose LOCAL day is today, searching the candidate UTC-date
+    prefixes that can overlap today's local span. Filenames are UTC-named
+    ('YYYY-MM-DD_HHMMSS.jpg'), so each hit is re-verified by converting its
+    stem to a local date via timeutils — never by string-slicing raw UTC.
+    """
+    from core.storage import list_images_for_date
+    from core.timeutils import (
+        filename_stem_local_date,
+        local_day_utc_prefixes,
+        today_local_str,
+    )
+
+    today = today_local_str()
+    latest: Optional[Path] = None
+    for prefix in local_day_utc_prefixes(today):
+        try:
+            day = datetime.strptime(prefix, "%Y-%m-%d")
+        except ValueError:
+            continue
+        for img in list_images_for_date(photos_root, day):
+            if filename_stem_local_date(img.stem) == today:
+                if latest is None or img.name > latest.name:
+                    latest = img
+    return latest
+
+
 def check_if_already_captured(app_paths) -> Tuple[bool, Optional[Path]]:
     """
-    Returns (True, path_to_image) if a photo exists for today.
+    Returns (True, path_to_image) if a photo exists for the LOCAL day today.
     Returns (False, None) if no photo exists.
     """
-    ts = datetime.now(timezone.utc)
     try:
-        from core.storage import last_image_for_date
-        existing = last_image_for_date(Path(app_paths.photos_root), ts)
+        existing = latest_photo_for_local_day(Path(app_paths.photos_root))
         if existing:
             return True, existing
     except ImportError:
@@ -37,33 +81,34 @@ def commit_capture_from_bytes(
 ) -> Dict[str, Any]:
     """
     Saves provided JPEG bytes to disk and records the entry.
+
+    Retake-safe (swap-after-save): the new file is written and recorded
+    BEFORE the previous photo is removed, so a crash/failure mid-retake
+    always leaves at least one valid photo for today.
     """
     ts = datetime.now(timezone.utc)
     
     # Lazy load dependencies
     try:
         from core.storage import (
-            save_image_bytes, last_image_for_date, delete_last_image_for_date, append_capture_index
+            save_image_bytes, delete_path, append_capture_index
         )
         from core.metadata import write_meta
+        from core.timeutils import today_local_str
     except ImportError as e:
         return {"success": False, "error": f"Import failed: {e}"}
 
-    # 1. Check Existing (Late check, just in case)
-    existing = last_image_for_date(Path(app_paths.photos_root), ts)
+    # 1. Check Existing (Late check, just in case) — LOCAL-day scope
+    existing = latest_photo_for_local_day(Path(app_paths.photos_root))
     if existing:
         if not allow_retake:
-            msg = f"Photo already exists for {ts.date()}"
+            today_str = today_local_str()
+            msg = f"Photo already exists for {today_str}"
             if logger:
-                logger.info("capture_blocked", extra={"meta": {"date": str(ts.date())}})
+                logger.info("capture_blocked", extra={"meta": {"date": today_str}})
             return {"success": False, "error": msg, "path": str(existing)}
-        
-        # Delete previous if retaking
-        delete_last_image_for_date(Path(app_paths.photos_root), ts)
-        if logger:
-             logger.info("retake_deletion", extra={"meta": {"path": str(existing)}})
 
-    # 2. Save File
+    # 2. Save new file atomically FIRST; old photo stays untouched until this succeeds
     res = save_image_bytes(Path(app_paths.photos_root), ts, jpeg_bytes)
     if not res.success:
         return {"success": False, "error": f"Save failed: {res.error}"}
@@ -71,7 +116,17 @@ def commit_capture_from_bytes(
     saved_path = res.path
     id_token = saved_path.stem
 
-    # 3. Record Index
+    # Durability: flush the new JPEG before any destructive step
+    try:
+        _fsync_file_and_dir(saved_path)
+    except OSError as e:
+        if logger:
+            logger.warning(
+                "fsync_failed",
+                extra={"meta": {"path": str(saved_path), "error": str(e)}},
+            )
+
+    # 3. Record Index (new row first; old photo retired only afterwards)
     index_entry = {
         "id": id_token,
         "ts": ts.isoformat(),
@@ -84,6 +139,7 @@ def commit_capture_from_bytes(
         "action": "capture",
     }
 
+    api = None
     try:
         from core.index_api import get_api
         api = get_api(app_paths)
@@ -100,6 +156,38 @@ def commit_capture_from_bytes(
 
     if logger:
         logger.info("image_saved", extra={"meta": {"path": str(saved_path)}})
+
+    # 4. Swap complete: only now retire the previous photo for today
+    if existing:
+        try:
+            old_path = Path(existing)
+            if old_path.exists() and old_path.resolve() != saved_path.resolve():
+                ok, err = delete_path(old_path)
+                if ok:
+                    if logger:
+                        logger.info("retake_deletion", extra={"meta": {"path": str(old_path)}})
+                    if api is not None:
+                        try:
+                            api.record_deletion(old_path.stem, reason="retake")
+                        except Exception as e:
+                            if logger:
+                                logger.warning(
+                                    f"Deletion audit failed for {old_path.stem}: {e}"
+                                )
+                else:
+                    if logger:
+                        logger.warning(
+                            "retake_delete_failed",
+                            extra={"meta": {"path": str(old_path), "error": err}},
+                        )
+        except Exception as e:
+            # Never fail the commit because cleanup of the superseded file failed;
+            # both files remain valid photos for today.
+            if logger:
+                logger.warning(
+                    "retake_delete_failed",
+                    extra={"meta": {"path": str(existing), "error": str(e)}},
+                )
 
     return {"success": True, "path": str(saved_path), "id": id_token, "timestamp": ts.isoformat()}
 

@@ -12,10 +12,14 @@ from gui.widgets.lift_mixin import LiftMixin
 from gui.widgets.motion import install_motion_wrapper
 from gui.widgets.pixmap_utils import active_dpr, recolored_icon, rounded_corners, scaled_cover_crop
 from gui.dashboard.widgets.mood_trend_chart import MoodTrendChart, play_entrance_fade
-from core.storage import last_image_for_date, delete_path
+from core.capture import check_if_already_captured
+from core.storage import delete_path
 from core.paths import get_app_paths
 from core.index_api import get_api
 from core.streak import calculate_streaks
+from core.logging import get_logger
+
+logger = get_logger("dashboard_page")
 
 # Asset paths
 _paths = get_app_paths("DailySelfie", ensure=False)
@@ -91,13 +95,12 @@ class TodaySelfieCard(LiftMixin, QFrame):
         """Check if today's selfie exists and set the appropriate state."""
         try:
             app_paths = get_app_paths("DailySelfie", ensure=True)
-            # Photos are stored in data_dir/photos, not photos_root
-            photos_root = Path(app_paths.data_dir) / "photos"
-            today = datetime.now()
+            # Photos are saved under app_paths.photos_root by capture
+            # (see core/capture.py); never compose data_dir/"photos".
+            # Timezone-aware LOCAL-day lookup (UTC-named files).
+            exists, today_selfie_path = check_if_already_captured(app_paths)
             
-            today_selfie_path = last_image_for_date(photos_root, today)
-            
-            if today_selfie_path and today_selfie_path.exists():
+            if exists and today_selfie_path and today_selfie_path.exists():
                 # Get metadata from index API
                 selfie_id = today_selfie_path.stem  # e.g., "2026-01-02_040733"
                 try:
@@ -1359,7 +1362,7 @@ class DashboardPage(QWidget):
     
     def refresh(self):
         """Refresh the dashboard to show updated data (e.g., after a new photo is saved)."""
-        print("Refreshing dashboard...")
+        logger.info("Refreshing dashboard...")
         if self._refreshing:
             return
         self._refreshing = True

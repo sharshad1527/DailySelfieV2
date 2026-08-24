@@ -23,17 +23,21 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 import json
 import time
+import sqlite3
 from datetime import datetime, timezone
 
-from core.indexer import Indexer
+from core.indexer import Indexer, SCHEMA_VERSION
 from core.metadata import read_meta, write_meta, delete_meta, merge_db_and_meta
 from core.locks import file_lock, lock_path_for
+from core.logging import get_logger
 from core.paths import get_app_paths
 from core.storage import append_capture_index, append_deletion_index
 
 # Default DB filename relative to data_dir
 DB_FILENAME = "index.db"
 AUDIT_FILENAME = "captures.jsonl"
+
+logger = get_logger("index_api")
 
 
 class IndexAPI:
@@ -73,10 +77,55 @@ class IndexAPI:
                 pass
 
     def init(self) -> None:
-        """Initialize the SQLite indexer (create DB if missing)."""
+        """Initialize the SQLite indexer (create DB if missing).
+
+        If the DB file is corrupt, it is quarantined (renamed with a
+        timestamp suffix) and rebuilt fresh; recoverable rows are re-imported
+        from captures.jsonl.
+        """
         if self._indexer is None:
-            self._indexer = Indexer(self.index_db_path)
-            self._indexer.init_db()
+            candidate: Optional[Indexer] = None
+            try:
+                candidate = Indexer(self.index_db_path)
+                candidate.init_db()
+            except sqlite3.DatabaseError as e:
+                if candidate is not None:
+                    candidate.close()
+                self._recover_from_corruption(e)
+            else:
+                self._indexer = candidate
+
+    def _recover_from_corruption(self, err: Exception) -> None:
+        """Quarantine a corrupt index.db, rebuild fresh and re-import JSONL."""
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        moved: List[str] = []
+        if self.index_db_path.exists():
+            target = self.index_db_path.with_name(f"{DB_FILENAME}.corrupt-{stamp}")
+            self.index_db_path.rename(target)
+            moved.append(target.name)
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(str(self.index_db_path) + suffix)
+            if sidecar.exists():
+                target = sidecar.with_name(sidecar.name + f".corrupt-{stamp}")
+                sidecar.rename(target)
+                moved.append(target.name)
+
+        fresh = Indexer(self.index_db_path)
+        fresh.init_db()
+        self._indexer = fresh
+
+        imported = 0
+        import_err: Optional[Exception] = None
+        try:
+            imported = self.migrate_if_needed()
+        except Exception as e:
+            import_err = e
+        logger.warning(
+            "index db corrupt (%s); quarantined as %s; rebuilt fresh; "
+            "re-imported %d rows from %s%s",
+            err, ", ".join(moved) or "-", imported, AUDIT_FILENAME,
+            f"; re-import failed: {import_err}" if import_err else "",
+        )
 
     def close(self) -> None:
         """Close DB connection if open."""
@@ -250,16 +299,19 @@ class IndexAPI:
 
     def get_all_capture_dates(self) -> List[str]:
         """
-        Public façade: sorted unique dates ('YYYY-MM-DD', UTC-bucketed) that
-        have captures (action='capture' only).
+        Public façade: sorted unique dates ('YYYY-MM-DD', LOCAL-bucketed via
+        timeutils) that have captures (action='capture' only).
         """
         idx = self._ensure_indexer()
         return idx.get_all_capture_dates()
 
     def get_all_capture_stamps(self) -> List[str]:
         """
-        Public façade: raw ts strings of every capture row (action='capture'),
-        ordered ascending. Callers convert to local time for day bucketing.
+        Public façade: raw UTC ts strings of every capture row
+        (action='capture'), ordered ascending.
+
+        Deliberately NOT converted: callers bucket these stamps themselves via
+        core.timeutils (raw feed contract).
         """
         idx = self._ensure_indexer()
         cur = idx._conn.execute(
@@ -270,78 +322,89 @@ class IndexAPI:
     def get_moods_since(self, days_back: int) -> List[Dict[str, Any]]:
         """
         Public façade: [{'date': 'YYYY-MM-DD', 'mood': str}, ...] for captures
-        with a mood within the last N days (action='capture' only).
+        with a mood within the last N LOCAL days (action='capture' only).
         """
         idx = self._ensure_indexer()
         return idx.get_moods_since(days_back)
 
     def get_capture_counts_by_date(self, year: int) -> Dict[str, int]:
         """
-        Capture counts per day for a full year.
+        Capture counts per LOCAL day for a full year.
 
-        Returns {'YYYY-MM-DD': count} using SQL substr(ts,1,10) GROUP BY over
-        rows with action='capture'. Dates are UTC-bucketed (string compare).
+        Returns {'YYYY-MM-DD': count}. Rows are pulled by action='capture' and
+        bucketed Python-side via timeutils.local_date_str so a boundary capture
+        lands on the user's local day (SQL substr would bucket UTC). Malformed
+        ts rows are skipped.
         """
+        from core.timeutils import local_date_str
+
         idx = self._ensure_indexer()
-        start = f"{year:04d}-01-01"
-        end = f"{year + 1:04d}-01-01"
+        year_prefix = f"{year:04d}-"
         cur = idx._conn.execute(
-            """
-            SELECT substr(ts, 1, 10) AS date_str, COUNT(*) AS c
-            FROM captures
-            WHERE action='capture' AND substr(ts, 1, 10) >= ? AND substr(ts, 1, 10) < ?
-            GROUP BY date_str ORDER BY date_str ASC
-            """,
-            (start, end),
+            "SELECT ts FROM captures WHERE action='capture'"
         )
-        return {row["date_str"]: int(row["c"]) for row in cur.fetchall()}
+        counts: Dict[str, int] = {}
+        for row in cur.fetchall():
+            d = local_date_str(row["ts"])
+            if d and d.startswith(year_prefix):
+                counts[d] = counts.get(d, 0) + 1
+        return dict(sorted(counts.items()))
 
     def get_on_this_day(self) -> Optional[Dict[str, Any]]:
         """
-        Most recent capture from this calendar day in a PREVIOUS year/month:
-        substr(ts, 6, 5) matches today's MM-DD but the date bucket is not
-        today. action='capture' only; ordered ts DESC, limit 1.
+        Most recent capture from this calendar day (MM-DD) in a PREVIOUS
+        year/month: the row's LOCAL day matches today's MM-DD but is not today.
+        action='capture' only; ordered ts DESC, first match wins.
 
-        Returns merged DB + sidecar dict, or None when there is no match.
+        Matching is done on timeutils-local dates, not substr(ts, 6, 5) of the
+        raw UTC ts. Returns merged DB + sidecar dict, or None when no match.
         """
+        from core.timeutils import local_date_str
+
         idx = self._ensure_indexer()
-        now = datetime.now()
+        now = datetime.now().astimezone()
         md = now.strftime("%m-%d")
         today_str = now.strftime("%Y-%m-%d")
         cur = idx._conn.execute(
-            """
-            SELECT * FROM captures
-            WHERE action='capture' AND substr(ts, 6, 5) = ? AND substr(ts, 1, 10) != ?
-            ORDER BY ts DESC LIMIT 1
-            """,
-            (md, today_str),
+            "SELECT id, ts FROM captures WHERE action='capture' ORDER BY ts DESC"
         )
-        row = cur.fetchone()
-        if not row:
-            return None
-        merged = merge_db_and_meta(dict(row), read_meta(self.data_dir, row["id"]))
-        return merged
+        for row in cur.fetchall():
+            d = local_date_str(row["ts"])
+            if not d or d == today_str:
+                continue
+            if d[5:] == md:
+                full = idx.get_capture_by_id(row["id"])
+                if full:
+                    return merge_db_and_meta(dict(full), read_meta(self.data_dir, full["id"]))
+        return None
 
     def get_moods_between(self, start: str, end: str) -> List[Dict[str, Any]]:
         """
-        Moods for captures whose UTC date bucket falls in [start, end]
-        inclusive ('YYYY-MM-DD' strings). Ordered by ts ascending so the LAST
-        entry per day is the latest capture's mood.
+        Moods for captures whose LOCAL date bucket falls in [start, end]
+        inclusive ('YYYY-MM-DD' strings). Rows are bucketed via
+        timeutils.local_date_str (stored UTC ts -> machine-local day); rows
+        outside the window or with malformed ts are skipped. Ordered by ts
+        ascending so the LAST entry per day is the latest capture's mood.
 
         Returns [{'date': 'YYYY-MM-DD', 'mood': str}, ...]
         """
+        from core.timeutils import local_date_str
+
         idx = self._ensure_indexer()
         cur = idx._conn.execute(
             """
-            SELECT substr(ts, 1, 10) AS date_str, mood
+            SELECT ts, mood
             FROM captures
             WHERE action='capture' AND mood IS NOT NULL
-              AND substr(ts, 1, 10) >= ? AND substr(ts, 1, 10) <= ?
             ORDER BY ts ASC
-            """,
-            (start, end),
+            """
         )
-        return [{"date": row["date_str"], "mood": row["mood"]} for row in cur.fetchall()]
+        out: List[Dict[str, Any]] = []
+        for row in cur.fetchall():
+            d = local_date_str(row["ts"])
+            if d and start <= d <= end:
+                out.append({"date": d, "mood": row["mood"]})
+        return out
 
     def get_last_photo(self) -> Optional[Dict[str, Any]]:
         """
@@ -377,10 +440,14 @@ class IndexAPI:
         """
         Run migration from captures.jsonl into SQLite. If jsonl_path is None, uses the default audit in data_dir.
         Returns number of rows imported (0 if none).
+        Skipped when the DB is already schema-stamped (user_version) and non-empty.
         """
         idx = self._ensure_indexer()
         jsonl = Path(jsonl_path) if jsonl_path else self.audit_path
         if not jsonl.exists():
+            return 0
+        # Already migrated: marker present AND db has rows -> skip re-read
+        if idx.get_user_version() >= SCHEMA_VERSION and idx.count_rows() > 0:
             return 0
         # run migration under lock
         lockpath = self._lock_for_audit()

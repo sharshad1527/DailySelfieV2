@@ -480,7 +480,9 @@ class StartupWindow(BaseFramelessWindow):
             height=beh.get("height")
         )
         self._preview_thread.frame_ready.connect(self._update_preview)
-        self._preview_thread.error_occurred.connect(lambda e: print(f"Camera Error: {e}"))
+        self._preview_thread.error_occurred.connect(
+            lambda e: get_logger("gui.selfie").warning("Camera preview error: %s", e)
+        )
         self._preview_thread.start()
 
     def _stop_preview(self):

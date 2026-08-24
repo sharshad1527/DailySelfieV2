@@ -5,27 +5,31 @@ Streak calculation utilities for DailySelfie.
 from datetime import datetime, timedelta
 from typing import List, Tuple
 
+from core.timeutils import today_local_str
+
 
 def calculate_streaks(date_strings: List[str], today: datetime = None) -> Tuple[int, int, bool]:
     """
     Calculate current streak and best streak from a list of date strings.
-    
+
     Args:
         date_strings: Sorted list of dates in 'YYYY-MM-DD' format
-        today: Optional datetime to use as "today" (for testing). Defaults to now.
-    
+        today: Optional datetime to use as "today" (for testing). Defaults to
+            the machine-LOCAL day via timeutils.today_local_str(). An aware
+            `today` is converted to local; a naive one is taken as-is.
+
     Returns:
         Tuple of (current_streak, best_streak, has_photo_today)
-        
+
     Behavior:
         - If photo taken today: current streak counts from today backwards
         - If no photo today: current streak counts from yesterday backwards
           (so user sees their "at risk" streak that will break if they don't take photo)
     """
     if today is None:
-        today = datetime.now()
-    
-    today_date = today.date()
+        today_date = datetime.strptime(today_local_str(), '%Y-%m-%d').date()
+    else:
+        today_date = (today if today.tzinfo is None else today.astimezone()).date()
     
     # Convert strings to date objects for easier comparison
     dates = set()

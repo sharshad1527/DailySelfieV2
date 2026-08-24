@@ -21,7 +21,7 @@ import os
 import platform
 import tempfile
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict, List
 
 try:
     import tomllib  # Python 3.11+
@@ -157,6 +157,57 @@ def _deep_merge(default: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, 
     return result
 
 
+def _strip_none(value: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Return a copy of a nested mapping with None-valued keys removed.
+    TOML has no null; absent keys fall back to defaults on load.
+    Does not mutate the input.
+    """
+    out: Dict[str, Any] = {}
+    for k, v in value.items():
+        if v is None:
+            continue
+        out[k] = _strip_none(v) if isinstance(v, dict) else v
+    return out
+
+
+def _format_toml_value(v: Any) -> str:
+    """Format a scalar or flat array as an inline TOML value."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (list, tuple)):
+        return "[" + ", ".join(_format_toml_value(x) for x in v) + "]"
+    if isinstance(v, (int, float)):
+        return str(v)
+    s = (
+        str(v)
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
+    return f'"{s}"'
+
+
+def _collect_toml_lines(mapping: Dict[str, Any], prefix: str, lines: List[str]) -> None:
+    """
+    Append TOML lines for one table level. None-valued keys are omitted;
+    nested dicts become [dotted] sub-tables after their scalars (TOML order).
+    """
+    for k, v in mapping.items():
+        if v is None or isinstance(v, dict):
+            continue
+        lines.append(f"{k} = {_format_toml_value(v)}")
+    for k, v in mapping.items():
+        if not isinstance(v, dict):
+            continue
+        header = f"{prefix}.{k}" if prefix else str(k)
+        lines.append("")
+        lines.append(f"[{header}]")
+        _collect_toml_lines(v, header, lines)
+
+
 # ---------------------------------------------------------
 # Public API
 # ---------------------------------------------------------
@@ -195,7 +246,7 @@ def write_config(config_path: Path, cfg: Dict[str, Any]) -> None:
     )
     try:
         with os.fdopen(fd, "wb") as f:
-            f.write(tomli_w.dumps(cfg).encode("utf-8"))
+            f.write(tomli_w.dumps(_strip_none(cfg)).encode("utf-8"))
             f.flush()
             os.fsync(f.fileno())
         Path(tmp_name).replace(config_path)
@@ -210,31 +261,31 @@ def write_config(config_path: Path, cfg: Dict[str, Any]) -> None:
 def write_config_bootstrap(config_path: Path, cfg: Dict[str, Any]) -> None:
     """
     Bootstrap-safe config writer.
-    Uses manual TOML writing.
-    No external dependencies.
+    Uses manual TOML writing (no external dependencies), atomic replace+fsync.
+    None-valued keys are omitted entirely: TOML has no null and a bare
+    `null` token would make the file unparseable on the next load; absent
+    keys fall back to defaults in load_config/_validate_behavior.
     """
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    lines = []
+    lines: List[str] = []
+    _collect_toml_lines(cfg, "", lines)
 
-    for section, values in cfg.items():
-        lines.append(f"[{section}]")
-        for k, v in values.items():
-            if isinstance(v, bool):
-                v = "true" if v else "false"
-            elif v is None:
-                v = "null"
-            elif isinstance(v, (int, float)):
-                v = str(v)
-            else:
-                # Escape backslashes and quotes for Windows paths
-                val_str = str(v)
-                val_str = val_str.replace("\\", "\\\\").replace('"', '\\"')
-                v = f'"{val_str}"'
-            lines.append(f"{k} = {v}")
-        lines.append("")
-
-    config_path.write_text("\n".join(lines), encoding="utf-8")
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(config_path.parent), prefix=".config.", suffix=".toml"
+    )
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(("\n".join(lines) + "\n").encode("utf-8"))
+            f.flush()
+            os.fsync(f.fileno())
+        Path(tmp_name).replace(config_path)
+    finally:
+        try:
+            if os.path.exists(tmp_name):
+                os.unlink(tmp_name)
+        except Exception:
+            pass
 
 
 def ensure_config(config_dir: Path) -> Dict[str, Any]:

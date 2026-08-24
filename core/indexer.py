@@ -21,6 +21,13 @@ import json
 import time
 import traceback
 
+from core.logging import get_logger
+
+logger = get_logger("indexer")
+
+# Bump when the schema changes; stamped into the DB via PRAGMA user_version.
+SCHEMA_VERSION = 1
+
 # Minimal schema: captures table. id is filename stem (e.g. 2025-12-12_074512)
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS captures (
@@ -68,7 +75,15 @@ class Indexer:
     def init_db(self) -> None:
         """Create tables and indexes if missing."""
         self._conn.executescript(_SCHEMA)
-        self._conn.commit()
+        # Stamp schema version (only ever move forward)
+        if self.get_user_version() < SCHEMA_VERSION:
+            self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            self._conn.commit()
+
+    def get_user_version(self) -> int:
+        """Return the schema version stamped in the DB (PRAGMA user_version)."""
+        row = self._conn.execute("PRAGMA user_version").fetchone()
+        return int(row[0]) if row else 0
 
     def add_capture(self, entry: Dict[str, Any]) -> None:
         """
@@ -203,7 +218,7 @@ class Indexer:
                             continue
 
                         if report_every and (i % report_every == 0):
-                            print(f"[indexer] migrated {i} lines...")
+                            logger.debug("migrated %d lines from %s", i, jsonl_path)
         except Exception:
             raise
 
@@ -227,54 +242,65 @@ class Indexer:
     
     def get_all_capture_dates(self) -> List[str]:
         """
-        Return a sorted list of unique dates (YYYY-MM-DD format) that have captures.
-        Only includes action='capture' (not deleted).
-        
+        Return a sorted list of unique LOCAL dates (YYYY-MM-DD format) that have
+        captures. Only includes action='capture' (not deleted).
+
+        ts values are UTC; bucketing converts each ts to the machine-local day
+        via timeutils so streak/heatmap consumers agree with local "today".
+        Malformed ts values are skipped (streak.py precedent).
+
         Example return: ['2025-12-25', '2025-12-26', '2025-12-28', '2026-01-01']
         """
-        # substr(ts, 1, 10) extracts first 10 chars: "2025-12-25" from "2025-12-25T10:30:00Z"
+        from core.timeutils import local_date_str
+
         cur = self._conn.execute(
-            """
-            SELECT DISTINCT substr(ts, 1, 10) as date_str 
-            FROM captures 
-            WHERE action='capture' 
-            ORDER BY date_str ASC
-            """
+            "SELECT ts FROM captures WHERE action='capture'"
         )
-        return [row['date_str'] for row in cur.fetchall()]
+        dates = set()
+        for row in cur.fetchall():
+            d = local_date_str(row["ts"])
+            if d:
+                dates.add(d)
+        return sorted(dates)
     
     def get_moods_since(self, days_back: int) -> List[Dict[str, Any]]:
         """
-        Return mood data for captures in the last N days.
-        
+        Return mood data for captures in the last N LOCAL days.
+
         Returns a list of dicts with 'date' and 'mood' for each capture
         where mood is set (not NULL). Only includes action='capture'.
-        
+        Ordered ts DESC (newest first); the 'date' is the capture's LOCAL day,
+        converted from the stored UTC ts via timeutils (never substr on UTC).
+
         Args:
             days_back: Number of days to look back (e.g., 7 or 30)
-            
+
         Returns:
             List of {'date': 'YYYY-MM-DD', 'mood': 'Great'|'Good'|'Neutral'|'Bad'|'Awful'}
         """
         from datetime import datetime, timedelta
-        
-        # Calculate cutoff date
+        from core.timeutils import local_date_str
+
+        # Calculate cutoff date (local)
         today = datetime.now().date()
         cutoff = today - timedelta(days=days_back - 1)  # -1 to include today
         cutoff_str = cutoff.isoformat()  # 'YYYY-MM-DD'
-        
+
         cur = self._conn.execute(
             """
-            SELECT substr(ts, 1, 10) as date, mood
+            SELECT ts, mood
             FROM captures
-            WHERE action='capture' 
-              AND mood IS NOT NULL 
-              AND substr(ts, 1, 10) >= ?
+            WHERE action='capture'
+              AND mood IS NOT NULL
             ORDER BY ts DESC
-            """,
-            (cutoff_str,)
+            """
         )
-        return [{'date': row['date'], 'mood': row['mood']} for row in cur.fetchall()]
+        out: List[Dict[str, Any]] = []
+        for row in cur.fetchall():
+            d = local_date_str(row["ts"])
+            if d and d >= cutoff_str:
+                out.append({"date": d, "mood": row["mood"]})
+        return out
     
     def count_rows(self) -> int:
         cur = self._conn.execute("SELECT COUNT(*) as c FROM captures")
