@@ -100,6 +100,10 @@ class DashboardWindow(DashboardShell):
         if new_index == old_index or not (0 <= new_index < self._pages.count()):
             return
         self._pages.setCurrentIndex(new_index)
+        if new_index == 1:
+            # Dashboard visible again: a capture made by the startup popup's
+            # separate process can't reach us via photoSaved — re-check.
+            self._dashboard_page.refresh_if_stale()
         if not mt.is_motion_enabled():
             return
         wrap = getattr(self._pages.widget(new_index), "_motion_wrapper", None)

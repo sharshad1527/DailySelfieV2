@@ -8,14 +8,18 @@ capture activity (~371 rects in a single paintEvent pass; NO widget-per-tile).
 - Click emits weekClicked(iso_week, anchor_date) where anchor_date is the
   ISO week's Thursday.
 - Partial ISO edge weeks render partial columns.
+- Weekday gutter is auto-sized from QFontMetrics (full Mon/Wed/Fri when it
+  fits within LABEL_GUTTER_MAX px, else single letters); labels are drawn
+  right-aligned inside [origin.x, grid_start) so they can never clip at the
+  widget's left edge.
 """
 from __future__ import annotations
 
 from datetime import date as date_cls, datetime, timedelta
 from typing import Dict, Optional
 
-from PySide6.QtCore import QPoint, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtCore import QEvent, QPoint, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from gui.theme.theme_vars import theme_vars
@@ -23,8 +27,13 @@ from .viz_types import MOOD_COLORS, paint_mood_dot
 
 CELL = 12
 GAP = 3
-LABEL_W = 26
 PAD = 4
+LABEL_FONT_PX = 9
+LABEL_GUTTER_PAD = 5   # breathing room between the widest label and the dots
+LABEL_GUTTER_MAX = 40  # keep full Mon/Wed/Fri while the gutter stays <= this
+
+_WEEKDAY_ROWS_FULL = ((0, "Mon"), (2, "Wed"), (4, "Fri"))
+_WEEKDAY_ROWS_SHORT = ((0, "M"), (2, "W"), (4, "F"))
 
 
 def _monday_on_or_before(d: date_cls) -> date_cls:
@@ -41,9 +50,38 @@ class YearHeatmapStrip(QWidget):
         self._moods: Dict[str, str] = {}
         self._today: Optional[date_cls] = None
         self._hover_col = -1
+        self._label_rows, self._gutter_w = self._resolve_labels()
         self.setMouseTracking(True)
         self.setMinimumHeight(7 * CELL + 6 * GAP + PAD * 2)
-        self.setMinimumWidth(LABEL_W + 53 * CELL + 52 * GAP + PAD * 2)
+        self.setMinimumWidth(self._grid_width() + PAD * 2)
+
+    # ---------------- label gutter ----------------
+    def _label_font(self) -> QFont:
+        f = self.font()
+        f.setPixelSize(LABEL_FONT_PX)
+        return f
+
+    def _resolve_labels(self):
+        """Pick Mon/Wed/Fri vs M/W/F from measured text width.
+
+        Returns (rows, gutter_w) where gutter_w is the widest label advance
+        plus LABEL_GUTTER_PAD — no magic numbers.
+        """
+        fm = QFontMetrics(self._label_font())
+        full_w = (max(fm.horizontalAdvance(t) for _, t in _WEEKDAY_ROWS_FULL)
+                  + LABEL_GUTTER_PAD)
+        if full_w <= LABEL_GUTTER_MAX:
+            return _WEEKDAY_ROWS_FULL, full_w
+        short_w = (max(fm.horizontalAdvance(t) for _, t in _WEEKDAY_ROWS_SHORT)
+                   + LABEL_GUTTER_PAD)
+        return _WEEKDAY_ROWS_SHORT, short_w
+
+    def changeEvent(self, event) -> None:
+        if event.type() == QEvent.Type.FontChange:
+            self._label_rows, self._gutter_w = self._resolve_labels()
+            self.setMinimumWidth(self._grid_width() + PAD * 2)
+            self.update()
+        super().changeEvent(event)
 
     # ---------------- data ----------------
     def set_year_data(self, year: int, activity: Dict[str, int],
@@ -56,16 +94,18 @@ class YearHeatmapStrip(QWidget):
         self.update()
 
     # ---------------- geometry helpers ----------------
+    def _grid_width(self) -> int:
+        return self._gutter_w + 53 * CELL + 52 * GAP
+
     def _origin(self) -> QPoint:
         w = self.width()
-        grid_w = LABEL_W + 53 * CELL + 52 * GAP
-        x = max(PAD, (w - grid_w) // 2)
+        x = max(PAD, (w - self._grid_width()) // 2)
         y = PAD
         return QPoint(x, y)
 
     def _cell_rect(self, col: int, row: int) -> QRectF:
         o = self._origin()
-        x = o.x() + LABEL_W + col * (CELL + GAP)
+        x = o.x() + self._gutter_w + col * (CELL + GAP)
         y = o.y() + row * (CELL + GAP)
         return QRectF(float(x), float(y), float(CELL), float(CELL))
 
@@ -99,14 +139,18 @@ class YearHeatmapStrip(QWidget):
             c.setAlphaF(alpha)
             fills.append(c)
 
-        # Weekday labels (Mon / Wed / Fri rows)
+        # Weekday labels (Mon / Wed / Fri rows), right-aligned inside the
+        # gutter so the text box always starts at or after origin.x (>= PAD):
+        # never clipped at the widget's left edge, never under the dots.
         p.setPen(QColor(v["on_surface_variant"]))
-        f = p.font()
-        f.setPixelSize(9)
-        p.setFont(f)
-        for row, label in ((0, "Mon"), (2, "Wed"), (4, "Fri")):
-            r = self._cell_rect(-1, row)
-            p.drawText(r.adjusted(-LABEL_W + GAP, -2, 0, 2), Qt.AlignVCenter | Qt.AlignLeft, label)
+        p.setFont(self._label_font())
+        o = self._origin()
+        label_box_w = self._gutter_w - GAP
+        for row, label in self._label_rows:
+            cell = self._cell_rect(0, row)
+            box = QRectF(float(o.x()), cell.top() - 2,
+                         float(label_box_w), cell.height() + 4)
+            p.drawText(box, Qt.AlignVCenter | Qt.AlignRight, label)
 
         if self._year is not None:
             for col in range(53):
@@ -142,7 +186,7 @@ class YearHeatmapStrip(QWidget):
     # ---------------- interaction ----------------
     def _hit(self, pos: QPoint):
         o = self._origin()
-        gx = pos.x() - o.x() - LABEL_W
+        gx = pos.x() - o.x() - self._gutter_w
         gy = pos.y() - o.y()
         if gx < 0 or gy < 0:
             return None

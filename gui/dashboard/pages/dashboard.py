@@ -1,9 +1,10 @@
 # gui/dashboard/pages/dashboard.py
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Tuple
 
-from PySide6.QtCore import Qt, QSize, Signal
+from PySide6.QtCore import Qt, QSize, Signal, QTimer, QFileSystemWatcher
 from PySide6.QtGui import QPixmap, QIcon, QPainter, QMovie, QColor, QImage, QKeySequence, QShortcut
 from PySide6.QtWidgets import QFrame, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QPushButton, QSizePolicy, QApplication
 
@@ -69,6 +70,7 @@ class TodaySelfieCard(LiftMixin, QFrame):
         self._metadata = {}
         self._current_image_height = 0
         self._render_key = None  # (path, w, h, dpr) of the last decoded pixmap
+        self._state_is_empty = False  # True once the empty-state UI is built
         self.take_selfie_btn = None  # Initialize to None
 
         self.setObjectName("TodaySelfieCard")
@@ -94,7 +96,12 @@ class TodaySelfieCard(LiftMixin, QFrame):
         self.init_lift()
 
     def _check_today_selfie(self):
-        """Check if today's selfie exists and set the appropriate state."""
+        """Check if today's selfie exists and set the appropriate state.
+
+        Idempotent: skips the UI rebuild when the resolved state matches
+        what is already shown, so repeated re-checks (showEvent / watcher)
+        are cheap no-ops.
+        """
         try:
             app_paths = get_app_paths("DailySelfie", ensure=True)
             # Photos are saved under app_paths.photos_root by capture
@@ -110,13 +117,23 @@ class TodaySelfieCard(LiftMixin, QFrame):
                     metadata = api.get_item(selfie_id) or {}
                 except Exception:
                     metadata = {}
-                
+
+                # Skip rebuild when already showing this exact capture
+                if (not self._state_is_empty
+                        and self._image_path is not None
+                        and Path(self._image_path) == Path(today_selfie_path)
+                        and self._metadata == metadata):
+                    return
+
                 self.set_taken_state(today_selfie_path, metadata)
             else:
+                if self._state_is_empty:
+                    return  # already showing empty state
                 self.set_empty_state()
         except Exception:
             # If anything goes wrong, default to empty state
-            self.set_empty_state()
+            if not self._state_is_empty:
+                self.set_empty_state()
 
     def _clear_content(self):
         """Remove existing content widget and selfie label if any."""
@@ -143,6 +160,7 @@ class TodaySelfieCard(LiftMixin, QFrame):
         Shows primary button and secondary caption.
         """
         self._clear_content()
+        self._state_is_empty = True
 
         # Create container for empty state content
         self._content_widget = QWidget()
@@ -230,6 +248,7 @@ class TodaySelfieCard(LiftMixin, QFrame):
         Configure card to show just the selfie image, filling the entire card.
         """
         self._clear_content()
+        self._state_is_empty = False
         self._metadata = metadata or {}
         self._image_path = image_path
 
@@ -1373,6 +1392,7 @@ class DashboardSurface(QFrame):
 
         # Selfie Card (image only, fills the card)
         today_selfie_card = TodaySelfieCard()
+        self._today_card = today_selfie_card
         
         # Connect the card's signal to our signal (forwards the request)
         today_selfie_card.takeSelfieRequested.connect(self.takeSelfieRequested.emit)
@@ -1438,6 +1458,26 @@ class DashboardPage(QWidget):
         self._refreshing = False
         self._build_surface()
 
+        # Cross-process staleness guard: the startup popup captures in its
+        # own process (QProcess-launched), so its save can never emit
+        # photoSaved into this window. The card's construction-time check is
+        # therefore stale until we re-check. Two triggers:
+        #   1) page visibility (showEvent / tab-switch refresh_if_stale)
+        #   2) best-effort QFileSystemWatcher on photos_root (fail-open)
+        self._last_external_check = 0.0
+        self._external_check_timer = QTimer(self)
+        self._external_check_timer.setSingleShot(True)
+        self._external_check_timer.setInterval(400)
+        self._external_check_timer.timeout.connect(self._on_watcher_debounce)
+        self._photos_watcher = None
+        try:
+            self._photos_watcher = QFileSystemWatcher(self)
+            self._photos_watcher.directoryChanged.connect(self._on_photos_dir_changed)
+            self._repoint_photos_watcher()
+        except Exception as e:
+            logger.warning("photos_watcher_unavailable", extra={"meta": {"error": str(e)}})
+            self._photos_watcher = None
+
         # Ctrl+Shift+C: copy today's photo — scoped to this page only so it
         # never fires while other pages are focused. No selfie → no-op.
         self._copy_shortcut = QShortcut(QKeySequence("Ctrl+Shift+C"), self)
@@ -1487,4 +1527,94 @@ class DashboardPage(QWidget):
             self._build_surface()
         finally:
             self._refreshing = False
+
+    # --- External-capture staleness handling ----------------------------
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.refresh_if_stale()
+
+    def refresh_if_stale(self):
+        """Public hook: re-check today's state when the page becomes visible."""
+        self._check_external_updates("page_visible")
+        self._repoint_photos_watcher()
+
+    def _photos_watch_targets(self):
+        """photos_root + current UTC year/month dirs (files are UTC-named)."""
+        try:
+            app_paths = get_app_paths("DailySelfie", ensure=False)
+            root = Path(app_paths.photos_root)
+            now_utc = datetime.now(timezone.utc)
+            year_dir = root / now_utc.strftime("%Y")
+            month_dir = year_dir / now_utc.strftime("%m")
+            return [root, year_dir, month_dir]
+        except Exception:
+            return []
+
+    def _repoint_photos_watcher(self):
+        """Sync watcher paths with current dirs; picks up month rollovers and
+        newly created YYYY/MM directories. No-op when watcher unavailable."""
+        watcher = self._photos_watcher
+        if watcher is None:
+            return
+        try:
+            desired = {str(p) for p in self._photos_watch_targets() if p.is_dir()}
+            current = set(watcher.directories())
+            removed = current - desired
+            added = desired - current
+            if removed:
+                watcher.removePaths(sorted(removed))
+            if added:
+                watcher.addPaths(sorted(added))
+        except Exception as e:
+            logger.warning("photos_watcher_repoint_failed", extra={"meta": {"error": str(e)}})
+
+    def _on_photos_dir_changed(self, path: str):
+        # Coalesce bursts (atomic save = temp file + rename); never re-check
+        # inline — the capture may still be mid-write.
+        self._external_check_timer.start()
+
+    def _on_watcher_debounce(self):
+        # A new year/month dir may have appeared: repoint before checking.
+        self._repoint_photos_watcher()
+        self._check_external_updates("photos_dir_changed", force=True)
+
+    def _check_external_updates(self, reason: str, force: bool = False):
+        """Re-sync when disk/index state diverged from what the card shows.
+
+        Cheap glob + index lookup; full surface rebuild only on actual drift,
+        which keeps streak/mood cards and the info box consistent too.
+        Loop-safe: refresh writes nothing under photos_root (thumbnails live
+        under data_dir/thumbs), so it cannot re-trigger the watcher.
+        """
+        if self._refreshing:
+            return
+        now = time.monotonic()
+        if not force and (now - self._last_external_check) < 0.25:
+            return
+        self._last_external_check = now
+
+        try:
+            app_paths = get_app_paths("DailySelfie", ensure=True)
+            exists, disk_path = check_if_already_captured(app_paths)
+        except Exception:
+            return
+
+        surface = self._surface
+        card = getattr(surface, "_today_card", None) if surface is not None else None
+        if card is None:
+            return
+
+        shown = card.get_image_path()
+        shown_path = Path(shown) if shown else None
+        disk_norm = Path(disk_path) if (exists and disk_path) else None
+        if shown_path == disk_norm:
+            return  # already in sync
+
+        logger.info("dashboard_state_stale", extra={"meta": {
+            "reason": reason,
+            "shown": str(shown_path) if shown_path else None,
+            "disk": str(disk_norm) if disk_norm else None,
+        }})
+        self.refresh()
 
