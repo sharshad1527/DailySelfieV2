@@ -33,6 +33,15 @@ try:
 except ModuleNotFoundError:
     tomli_w = None
 
+try:
+    # paths.py is dependency-free; used here so explicit DS_* env overrides
+    # can win over config-derived defaults inside apply_config_to_paths().
+    from core.paths import get_env_overrides
+except ModuleNotFoundError:
+    # Direct-script execution fallback (python core/config.py): degrade to
+    # pre-fix behavior instead of breaking standalone use.
+    get_env_overrides = None
+
 
 # ---------------------------------------------------------
 # Default configuration (OS-AWARE DEFAULTS)
@@ -250,29 +259,54 @@ def apply_config_to_paths(paths, cfg: Dict[str, Any]):
     """
     Override install-related paths using config.
     config_dir is NOT overridden (bootstrap invariant).
+
+    Precedence per dir:
+        explicit DS_* env var (set before this call)
+        > config.toml [installation] value
+        > install_dir-derived fallback / OS default already in `paths`
+
+    When DS_DATA_DIR is set, logs_dir is pinned under it even if config.toml
+    carries an explicit logs_dir, so harness probes can never be redirected
+    back onto real user dirs. Use DS_LOGS_DIR for an explicit sandbox logs dir.
     """
     inst = cfg.get("installation", {})
+
+    env = get_env_overrides() if get_env_overrides is not None else {}
 
     # install_dir is informational (used by installer/uninstaller)
     install_dir = Path(
         inst.get("install_dir", "~/.local/share/DailySelfie")
     ).expanduser().resolve()
 
-    paths.data_dir = Path(
-        inst.get("data_dir", install_dir / "data")
-    ).expanduser().resolve()
+    if "data_dir" in env:
+        paths.data_dir = env["data_dir"]
+    else:
+        paths.data_dir = Path(
+            inst.get("data_dir", install_dir / "data")
+        ).expanduser().resolve()
 
-    paths.logs_dir = Path(
-        inst.get("logs_dir", install_dir / "logs")
-    ).expanduser().resolve()
+    if "logs_dir" in env:
+        paths.logs_dir = env["logs_dir"]
+    elif "data_dir" in env:
+        paths.logs_dir = env["data_dir"] / "logs"
+    else:
+        paths.logs_dir = Path(
+            inst.get("logs_dir", install_dir / "logs")
+        ).expanduser().resolve()
 
-    paths.photos_root = Path(
-        inst.get("photos_root", install_dir / "photos")
-    ).expanduser().resolve()
+    if "photos_root" in env:
+        paths.photos_root = env["photos_root"]
+    else:
+        paths.photos_root = Path(
+            inst.get("photos_root", install_dir / "photos")
+        ).expanduser().resolve()
 
-    paths.venv_dir = Path(
-        inst.get("venv_dir", install_dir / "venv")
-    ).expanduser().resolve()
+    if "venv_dir" in env:
+        paths.venv_dir = env["venv_dir"]
+    else:
+        paths.venv_dir = Path(
+            inst.get("venv_dir", install_dir / "venv")
+        ).expanduser().resolve()
 
     return paths
 

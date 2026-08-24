@@ -296,6 +296,32 @@ class IndexAPI:
         )
         return {row["date_str"]: int(row["c"]) for row in cur.fetchall()}
 
+    def get_on_this_day(self) -> Optional[Dict[str, Any]]:
+        """
+        Most recent capture from this calendar day in a PREVIOUS year/month:
+        substr(ts, 6, 5) matches today's MM-DD but the date bucket is not
+        today. action='capture' only; ordered ts DESC, limit 1.
+
+        Returns merged DB + sidecar dict, or None when there is no match.
+        """
+        idx = self._ensure_indexer()
+        now = datetime.now()
+        md = now.strftime("%m-%d")
+        today_str = now.strftime("%Y-%m-%d")
+        cur = idx._conn.execute(
+            """
+            SELECT * FROM captures
+            WHERE action='capture' AND substr(ts, 6, 5) = ? AND substr(ts, 1, 10) != ?
+            ORDER BY ts DESC LIMIT 1
+            """,
+            (md, today_str),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        merged = merge_db_and_meta(dict(row), read_meta(self.data_dir, row["id"]))
+        return merged
+
     def get_moods_between(self, start: str, end: str) -> List[Dict[str, Any]]:
         """
         Moods for captures whose UTC date bucket falls in [start, end]

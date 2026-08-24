@@ -438,6 +438,18 @@ def main(argv=None):
             app_paths=paths,
         )
         win.show()
+
+        # Wave-1 system tray: default dashboard launch only (--start-up popup
+        # and headless CLI modes skip it). No-op when no tray host exists.
+        try:
+            from gui.tray import create_tray_icon, focus_window
+            tray_icon = create_tray_icon(
+                app, cfg, paths, get_index_api(paths),
+                lambda: focus_window(win),
+            )
+        except Exception:
+            logger.exception("tray_init_failed")
+
         return app.exec()
 
     else:

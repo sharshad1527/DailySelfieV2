@@ -11,6 +11,7 @@ from gui.theme.theme_vars import theme_vars
 from gui.widgets.lift_mixin import LiftMixin
 from gui.widgets.motion import install_motion_wrapper
 from gui.widgets.pixmap_utils import active_dpr, recolored_icon, rounded_corners, scaled_cover_crop
+from gui.dashboard.widgets.mood_trend_chart import MoodTrendChart, play_entrance_fade
 from core.storage import last_image_for_date, delete_path
 from core.paths import get_app_paths
 from core.index_api import get_api
@@ -316,6 +317,104 @@ class TodaySelfieCard(LiftMixin, QFrame):
         super().resizeEvent(event)
         if self._image_path:
             self._update_selfie_image()
+
+class OnThisDayBanner(LiftMixin, QFrame):
+    """
+    Throwback strip: most recent capture from this calendar day in a previous
+    year/month (IndexAPI.get_on_this_day). Hidden entirely when there is no
+    match — build via create(), which returns None instead of an empty card.
+    """
+    openRequested = Signal(object)  # date of the throwback day
+
+    THUMB_SIZE = 40
+
+    def __init__(self, entry: dict):
+        super().__init__()
+        self._vars = theme_vars()
+        self._entry = entry or {}
+        self._day = self._parse_day()
+
+        self.setObjectName("OnThisDayBanner")
+        self.setFixedHeight(56)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setStyleSheet(f"""
+            QFrame#OnThisDayBanner {{
+                background-color: {self._vars['surface_container_low']};
+                border-radius: 12px;
+            }}
+        """)
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(12, 8, 12, 8)
+        row.setSpacing(10)
+
+        thumb_label = QLabel()
+        thumb_label.setFixedSize(self.THUMB_SIZE, self.THUMB_SIZE)
+        pixmap = QPixmap(str(self._entry.get("path") or ""))
+        if not pixmap.isNull():
+            scaled = scaled_cover_crop(pixmap, self.THUMB_SIZE, self.THUMB_SIZE, active_dpr(self))
+            thumb_label.setPixmap(rounded_corners(scaled, 10))
+            row.addWidget(thumb_label)
+
+        text_col = QVBoxLayout()
+        text_col.setContentsMargins(0, 0, 0, 0)
+        text_col.setSpacing(1)
+        caption = QLabel("On this day")
+        caption.setStyleSheet(f"""
+            color: {self._vars['primary']};
+            font-size: 10px;
+            font-weight: 600;
+        """)
+        text_col.addWidget(caption)
+
+        date_label = QLabel(self._format_day())
+        date_label.setStyleSheet(f"""
+            color: {self._vars['on_surface']};
+            font-size: 13px;
+            font-weight: 600;
+        """)
+        text_col.addWidget(date_label)
+        text_col.addStretch()
+        row.addLayout(text_col)
+        row.addStretch()
+
+        hint = QLabel("View in Calendar")
+        hint.setStyleSheet(f"""
+            color: {self._vars['on_surface_variant']};
+            font-size: 11px;
+        """)
+        row.addWidget(hint)
+
+        self.init_lift()
+
+    @classmethod
+    def create(cls):
+        """Build a banner for today's throwback capture, or None when no match."""
+        try:
+            app_paths = get_app_paths("DailySelfie", ensure=True)
+            entry = get_api(app_paths).get_on_this_day()
+        except Exception:
+            return None
+        return cls(entry) if entry else None
+
+    def _parse_day(self):
+        ts = str(self._entry.get("ts") or "")
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00")).astimezone().date()
+        except ValueError:
+            try:
+                return datetime.strptime(ts[:10], "%Y-%m-%d").date()
+            except ValueError:
+                return None
+
+    def _format_day(self) -> str:
+        return self._day.strftime("%b %d, %Y") if self._day else ""
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self._day is not None:
+            self.openRequested.emit(self._day)
+        super().mouseReleaseEvent(event)
+
 
 class StreakSummaryWidget(LiftMixin, QFrame):
     """
@@ -662,6 +761,63 @@ class MoodSummaryWidget(LiftMixin, QFrame):
             if mood:
                 counts[mood] = counts.get(mood, 0) + 1
         return counts
+
+
+class MoodTrendCard(LiftMixin, QFrame):
+    """
+    Compact sparkline of the last 14 days of moods (MoodTrendChart).
+    Data loads on construction; the page-level themeChanged→refresh rebuild
+    recreates the card so theme switches repaint it with fresh data.
+    """
+    CHART_DAYS = 14
+
+    def __init__(self):
+        super().__init__()
+        self._vars = theme_vars()
+        self._entered = False
+
+        self.setObjectName("MoodTrendCard")
+        self.setMinimumHeight(108)
+        self.setMinimumWidth(200)
+        self.setMaximumWidth(280)
+        self.setStyleSheet(f"""
+            QFrame#MoodTrendCard {{
+                background-color: {self._vars['surface_container_low']};
+                border-radius: 16px;
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(6)
+
+        title = QLabel("Mood Trend")
+        title.setStyleSheet(f"""
+            color: {self._vars['on_surface']};
+            font-size: 14px;
+            font-weight: 600;
+        """)
+        layout.addWidget(title)
+
+        self._chart = MoodTrendChart(self)
+        layout.addWidget(self._chart, 1)
+
+        self.init_lift()
+        self.refresh_data()
+
+    def refresh_data(self):
+        try:
+            app_paths = get_app_paths("DailySelfie", ensure=True)
+            rows = get_api(app_paths).get_moods_since(self.CHART_DAYS)
+        except Exception:
+            rows = []
+        self._chart.set_moods(rows, days=self.CHART_DAYS)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._entered:
+            self._entered = True
+            play_entrance_fade(self)
 
 
 class TodaySelfieInfoBox(LiftMixin, QFrame):
@@ -1076,6 +1232,8 @@ class DashboardSurface(QFrame):
     retakeRequested = Signal()
     # Signal emitted when photo is deleted
     photoDeleted = Signal()
+    # Signal emitted when the On This Day banner is clicked (carries date)
+    throwbackOpenRequested = Signal(object)
     
     def __init__(self):
         super().__init__()
@@ -1093,6 +1251,14 @@ class DashboardSurface(QFrame):
         surface_layout = QVBoxLayout(self)
         surface_layout.setContentsMargins(12, 12, 12, 12)
         surface_layout.setSpacing(12)
+
+        # Wave-1: On This Day throwback strip (hidden entirely when no match)
+        banner = OnThisDayBanner.create()
+        if banner is not None:
+            # TODO(wave-2 wiring): connect DashboardPage.throwbackOpenRequested
+            # in gui/dashboard/dashboard.py → CalendarPage jump-to-day.
+            banner.openRequested.connect(self.throwbackOpenRequested.emit)
+            surface_layout.addWidget(banner)
 
         # Top Section Container - expanding to fill available space
         top_section_container = QWidget()
@@ -1121,9 +1287,11 @@ class DashboardSurface(QFrame):
 
         streak_summary_widget = StreakSummaryWidget()
         mood_summary_widget = MoodSummaryWidget()
+        mood_trend_card = MoodTrendCard()
 
         side_column.addWidget(streak_summary_widget)
         side_column.addWidget(mood_summary_widget)
+        side_column.addWidget(mood_trend_card)
         side_column.addStretch()  # Push widgets up, don't let them expand down
 
         # Layout: Selfie (stretch=2) | InfoBox (stretch=0) | SideColumn (stretch=0)
@@ -1146,6 +1314,10 @@ class DashboardPage(QWidget):
     retakeRequested = Signal()
     # Signal emitted when photo is deleted
     photoDeleted = Signal()
+    # Signal emitted when the On This Day banner is clicked (carries date).
+    # TODO(wave-2 wiring): connect this in gui/dashboard/dashboard.py to open
+    # CalendarPage on the given day (CalendarPage._jump_to_month + detail).
+    throwbackOpenRequested = Signal(object)
     
     def __init__(self):
         super().__init__()
@@ -1181,6 +1353,8 @@ class DashboardPage(QWidget):
         self._surface.retakeRequested.connect(self.retakeRequested.emit)
         # Forward the photoDeleted signal
         self._surface.photoDeleted.connect(self.photoDeleted.emit)
+        # Forward the throwback banner click
+        self._surface.throwbackOpenRequested.connect(self.throwbackOpenRequested.emit)
         self._root_layout.addWidget(self._surface)
     
     def refresh(self):
