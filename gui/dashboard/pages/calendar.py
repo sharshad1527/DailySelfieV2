@@ -54,6 +54,7 @@ from PySide6.QtWidgets import (
 from core.index_api import IndexAPI, get_api
 from core.paths import AppPaths, get_app_paths
 from core.storage import delete_path
+from core.thumbs import load_display_pixmap
 from gui.theme import motion_tokens as mt
 from gui.theme.theme_vars import theme_vars
 from gui.widgets.error_popup import ErrorToast
@@ -92,10 +93,15 @@ def _create_colored_icon(icon_name: str, qcolor: QColor, dpr: Optional[float] = 
 
 def _rounded_crop_pixmap(path: Optional[Path], w: int, h: int, radius: int,
                          dpr: float = 1.0) -> Optional[QPixmap]:
-    """Crop-fill scaled rounded pixmap (TodaySelfieCard._update_selfie_image pattern)."""
+    """Crop-fill scaled rounded pixmap (TodaySelfieCard._update_selfie_image pattern).
+
+    Oversized sources are served from the disk thumbnail cache (core.thumbs);
+    cover-crop geometry is unchanged. Callers keep their generation-counter
+    cancellation - only the decoded file differs.
+    """
     if not path or not path.exists():
         return None
-    pixmap = QPixmap(str(path))
+    pixmap = load_display_pixmap(path, max(w, h), dpr)
     if pixmap.isNull():
         return None
     return rounded_corners(scaled_cover_crop(pixmap, w, h, dpr), radius)

@@ -90,7 +90,7 @@ class StartupWindow(BaseFramelessWindow):
         self.index_api = get_api(self.paths)
         idx = self.index_api._ensure_indexer()
         if idx.count_rows() == 0:
-            print("Migrating history from captures.jsonl...")
+            get_logger("gui.startup").info("Migrating history from captures.jsonl...")
             self.index_api.migrate_if_needed()
 
     def _setup_countdown_timer(self):
@@ -367,7 +367,7 @@ class StartupWindow(BaseFramelessWindow):
                         self._raw_ghost_image = img.convertToFormat(QImage.Format_Grayscale8)
                         self._update_ghost_visuals()
         except Exception as e:
-            print(f"Ghost load error: {e}")
+            get_logger("gui.startup").info("Ghost load error: %s", e)
 
     def _update_ghost_visuals(self):
         if self._raw_ghost_image and self.ghost_lbl.isVisible():
@@ -584,7 +584,9 @@ class StartupWindow(BaseFramelessWindow):
         )
 
         if result["success"]:
-            print(f"Saved to: {result['path']}")
+            get_logger("gui.startup").info("Saved to: %s", result.get("path"))
             self.close()
         else:
-            print(f"Save Failed: {result['error']}")
+            get_logger("gui.startup").warning(
+                "Save failed: %s", result.get("error", "unknown error")
+            )

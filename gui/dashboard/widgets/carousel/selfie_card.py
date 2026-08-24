@@ -21,6 +21,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtCore import Qt, QRectF, Signal
 
+from core.thumbs import load_display_pixmap
 from gui.theme.theme_vars import theme_vars
 
 
@@ -30,6 +31,11 @@ from gui.theme.theme_vars import theme_vars
 
 # Card styling
 CARD_CORNER_RADIUS = 16.0
+
+# Largest card the carousel layout draws (CarouselLayoutEngine.large_width);
+# combined with IMAGE_ZOOM_FACTOR this bounds how many device pixels a card
+# really needs, deciding when the disk thumbnail cache is used.
+HERO_MAX_LONG_PX = 200.0
 
 # Image zoom factor (1.25 = 25% zoom for a closer/bigger feel)
 IMAGE_ZOOM_FACTOR = 1.25
@@ -121,9 +127,14 @@ class SelfieCard(QWidget):
         self._date_text = self._parse_timestamp(ts)
         
         # Load image if path is valid (tagged with the widget's device pixel
-        # ratio so painting stays sharp on HiDPI screens)
+        # ratio so painting stays sharp on HiDPI screens). Oversized sources
+        # are served from the disk thumbnail cache; geometry is unchanged.
         if image_path and Path(image_path).exists():
-            self._pixmap = QPixmap(image_path)
+            self._pixmap = load_display_pixmap(
+                Path(image_path),
+                HERO_MAX_LONG_PX * IMAGE_ZOOM_FACTOR,
+                self.devicePixelRatioF(),
+            )
             if not self._pixmap.isNull():
                 self._pixmap.setDevicePixelRatio(self.devicePixelRatioF())
             self._is_placeholder = False

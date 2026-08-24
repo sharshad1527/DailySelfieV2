@@ -132,6 +132,11 @@ class ErrorToast(QDialog):
             lbl_msg.setMinimumWidth(220)  # keep short messages on one line
         lbl_msg.setObjectName("Message")
         lbl_msg.setMaximumWidth(320)
+        # Cap wrapped messages/tracebacks so the toast never outgrows the
+        # screen; full text stays reachable via "Copy Logs".
+        screen = QGuiApplication.primaryScreen()
+        if screen is not None:
+            lbl_msg.setMaximumHeight(int(screen.availableGeometry().height() * 0.6))
         content_layout.addWidget(lbl_msg)
 
         # Buttons

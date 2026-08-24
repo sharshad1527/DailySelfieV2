@@ -15,6 +15,7 @@ from gui.dashboard.widgets.mood_trend_chart import MoodTrendChart, play_entrance
 from core.capture import check_if_already_captured
 from core.storage import delete_path
 from core.paths import get_app_paths
+from core.thumbs import load_display_pixmap
 from core.index_api import get_api
 from core.streak import calculate_streaks
 from core.logging import get_logger
@@ -67,6 +68,7 @@ class TodaySelfieCard(LiftMixin, QFrame):
         self._image_path = None
         self._metadata = {}
         self._current_image_height = 0
+        self._render_key = None  # (path, w, h, dpr) of the last decoded pixmap
         self.take_selfie_btn = None  # Initialize to None
 
         self.setObjectName("TodaySelfieCard")
@@ -133,6 +135,7 @@ class TodaySelfieCard(LiftMixin, QFrame):
         self._image_path = None
         self._metadata = {}
         self._current_image_height = 0
+        self._render_key = None
 
     def set_empty_state(self):
         """
@@ -296,7 +299,17 @@ class TodaySelfieCard(LiftMixin, QFrame):
             return  # Card not properly sized yet
 
         dpr = self.devicePixelRatioF()
-        pixmap = QPixmap(str(self._image_path))
+
+        # Decode once per (path, size, dpr): resizes reuse the last pixmap and
+        # oversized sources come from the disk thumbnail cache, so window
+        # resizing no longer re-decodes the full-resolution capture.
+        render_key = (str(self._image_path), card_width, card_height, dpr)
+        if render_key != self._render_key:
+            self._render_key = render_key
+            self._pixmap_cache = load_display_pixmap(
+                Path(self._image_path), max(card_width, card_height), dpr)
+        pixmap = getattr(self, "_pixmap_cache", QPixmap())
+
         if not pixmap.isNull():
             # Scale to fill the available space while keeping aspect ratio,
             # then crop — all in device pixels so HiDPI stays sharp
@@ -353,11 +366,13 @@ class OnThisDayBanner(LiftMixin, QFrame):
 
         thumb_label = QLabel()
         thumb_label.setFixedSize(self.THUMB_SIZE, self.THUMB_SIZE)
-        pixmap = QPixmap(str(self._entry.get("path") or ""))
-        if not pixmap.isNull():
-            scaled = scaled_cover_crop(pixmap, self.THUMB_SIZE, self.THUMB_SIZE, active_dpr(self))
-            thumb_label.setPixmap(rounded_corners(scaled, 10))
-            row.addWidget(thumb_label)
+        source = Path(str(self._entry.get("path") or ""))
+        if source.exists():
+            pixmap = load_display_pixmap(source, self.THUMB_SIZE, active_dpr(self))
+            if not pixmap.isNull():
+                scaled = scaled_cover_crop(pixmap, self.THUMB_SIZE, self.THUMB_SIZE, active_dpr(self))
+                thumb_label.setPixmap(rounded_corners(scaled, 10))
+                row.addWidget(thumb_label)
 
         text_col = QVBoxLayout()
         text_col.setContentsMargins(0, 0, 0, 0)

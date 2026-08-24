@@ -112,7 +112,7 @@ class SelfiePage(QWidget):
         self.index_api = get_api(self.paths)
         idx = self.index_api._ensure_indexer()
         if idx.count_rows() == 0:
-            print("Migrating history from captures.jsonl...")
+            get_logger("gui.selfie").info("Migrating history from captures.jsonl...")
             self.index_api.migrate_if_needed()
 
     def _setup_countdown_timer(self):
@@ -388,7 +388,7 @@ class SelfiePage(QWidget):
                         self._raw_ghost_image = img.convertToFormat(QImage.Format_Grayscale8)
                         self._update_ghost_visuals()
         except Exception as e:
-            print(f"Ghost load error: {e}")
+            get_logger("gui.selfie").info("Ghost load error: %s", e)
 
     def _update_ghost_visuals(self):
         if self._raw_ghost_image and self.ghost_lbl.isVisible():
@@ -501,7 +501,7 @@ class SelfiePage(QWidget):
             if exists and today_path and today_path.exists():
                 return today_path
         except Exception as e:
-            print(f"Error checking today's photo: {e}")
+            get_logger("gui.selfie").warning("Error checking today's photo: %s", e)
         return None
     
     def _load_and_show_today_photo(self, photo_path):
@@ -538,7 +538,7 @@ class SelfiePage(QWidget):
             self._set_photo_taken_state()
             
         except Exception as e:
-            print(f"Error loading today's photo: {e}")
+            get_logger("gui.selfie").warning("Error loading today's photo: %s", e)
             self._start_preview()
     
     def _reset_to_camera_mode(self):
@@ -743,7 +743,7 @@ class SelfiePage(QWidget):
         )
 
         if result["success"]:
-            print(f"Saved to: {result['path']}")
+            get_logger("gui.selfie").info("Saved to: %s", result["path"])
             # Instead of closing, show the photo-taken state with metadata
             self._saved_metadata = {
                 "mood": selected_mood,
@@ -757,7 +757,9 @@ class SelfiePage(QWidget):
             # Emit signal for dashboard refresh
             self.photoSaved.emit()
         else:
-            print(f"Save Failed: {result['error']}")
+            get_logger("gui.selfie").warning(
+                "Save failed: %s", result.get("error", "unknown error")
+            )
 
     def _set_photo_taken_state(self):
         """Display saved photo with metadata panel and retake button."""
