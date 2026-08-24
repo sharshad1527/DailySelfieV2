@@ -431,6 +431,46 @@ def main(argv=None):
             except Exception:
                 pass
 
+        # ---- Single-instance enforcement (default GUI launches ONLY) ----
+        # POLICY: enforcement is deliberately scoped to the default dashboard
+        # launch. `--start-up` popup launches MUST remain allowed while the
+        # dashboard runs (the tray "Capture now" action spawns one as a
+        # detached subprocess), and headless CLI modes are unaffected.
+        # Fail-open: any machinery error logs a warning and we continue as
+        # primary — startup must never be blocked by this plumbing.
+        # HOISTED before DashboardWindow() construction so a double launch
+        # exits before flashing a second window/camera/tray. The callback
+        # resolves `win` lazily via win_holder (filled right below); a focus
+        # request arriving before construction is queued and applied after
+        # fill (events can dispatch during widget construction via
+        # processEvents), keeping empty-args secondary -> focus semantics.
+        si_server = True
+        win_holder = []
+        pending_focus = {"queued": False}
+        try:
+            from core.single_instance import try_become_primary
+            from gui.tray import focus_window
+
+            def _on_secondary_launch(fwd_args):
+                if fwd_args:
+                    logger.info(
+                        "secondary_launch_args",
+                        extra={"meta": {"args": fwd_args}},
+                    )
+                elif win_holder:
+                    focus_window(win_holder[0])
+                else:
+                    pending_focus["queued"] = True
+
+            si_server = try_become_primary(on_secondary_launch=_on_secondary_launch)
+        except Exception:
+            logger.exception("single_instance_init_failed")
+
+        if si_server is None:
+            # A dashboard is already running and received our args; exit quietly.
+            logger.info("secondary_instance_exit")
+            return 0
+
         win = DashboardWindow(
             theme_controller=theme_controller,
             cfg=cfg,
@@ -438,6 +478,16 @@ def main(argv=None):
             app_paths=paths,
         )
         win.show()
+        win_holder.append(win)
+        if pending_focus["queued"]:
+            # A secondary focused-request arrived while the window was being
+            # constructed; apply it now that `win` exists.
+            pending_focus["queued"] = False
+            try:
+                from gui.tray import focus_window
+                focus_window(win)
+            except Exception:
+                logger.exception("single_instance_deferred_focus_failed")
 
         # Wave-1 system tray: default dashboard launch only (--start-up popup
         # and headless CLI modes skip it). No-op when no tray host exists.
@@ -449,6 +499,19 @@ def main(argv=None):
             )
         except Exception:
             logger.exception("tray_init_failed")
+
+        def _close_single_instance_server():
+            try:
+                closer = getattr(si_server, "close", None)
+                if callable(closer):
+                    closer()
+                later = getattr(si_server, "deleteLater", None)
+                if callable(later):
+                    later()
+            except RuntimeError:
+                pass
+
+        app.aboutToQuit.connect(_close_single_instance_server)
 
         return app.exec()
 

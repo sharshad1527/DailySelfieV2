@@ -86,7 +86,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "timer_duration": 0,
 
         # Motion system gate (docs/design/motion-system.md)
-        "motion_enabled": True
+        "motion_enabled": True,
+
+        # Photo quality advisory gate (core/quality.py): before saving, score
+        # the capture and show a Retake/Save Anyway dialog when blurry/dark/
+        # bright. Advisory-only; user can always save. Passthrough bool like
+        # allow_retake: no _validate_behavior coercion needed — TOML emits
+        # native bools and _deep_merge fills absent keys from defaults.
+        "quality_gate_enabled": True
     },
     "theme": {
     "name": "material-theme",

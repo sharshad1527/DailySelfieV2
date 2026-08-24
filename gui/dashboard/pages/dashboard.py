@@ -4,8 +4,8 @@ from pathlib import Path
 from typing import Tuple
 
 from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtGui import QPixmap, QIcon, QPainter, QMovie, QColor
-from PySide6.QtWidgets import QFrame, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QPushButton, QSizePolicy
+from PySide6.QtGui import QPixmap, QIcon, QPainter, QMovie, QColor, QImage, QKeySequence, QShortcut
+from PySide6.QtWidgets import QFrame, QWidget, QLabel, QVBoxLayout, QHBoxLayout, QPushButton, QSizePolicy, QApplication
 
 from gui.theme.theme_vars import theme_vars
 from gui.widgets.lift_mixin import LiftMixin
@@ -1137,6 +1137,39 @@ class TodaySelfieInfoBox(LiftMixin, QFrame):
         retake_btn.clicked.connect(self.retakeRequested.emit)
         self._layout.addWidget(retake_btn)
 
+        # Copy today's photo to clipboard (secondary style, Retake/Delete metrics)
+        self._copy_btn = QPushButton("Copy")
+        self._copy_btn.setObjectName("CopyButton")
+        self._copy_btn.setCursor(Qt.PointingHandCursor)
+        self._copy_btn.setFixedHeight(32)
+
+        copy_icon = self._create_colored_icon(
+            "copy.svg",
+            self._vars.qcolor('on_surface_variant')
+        )
+        self._copy_btn.setIcon(copy_icon)
+        self._copy_btn.setIconSize(QSize(14, 14))
+        self._copy_btn.setToolTip("Copy photo to clipboard (Ctrl+Shift+C)")
+
+        self._copy_btn.setStyleSheet(f"""
+            QPushButton#CopyButton {{
+                background-color: {self._vars['surface_container_high']};
+                color: {self._vars['on_surface_variant']};
+                border: 1px solid {self._vars['outline_variant']};
+                border-radius: 16px;
+                padding: 0 12px;
+                font-size: 11px;
+                font-weight: 500;
+            }}
+            QPushButton#CopyButton:hover {{
+                background-color: {self._vars['surface_container_highest']};
+                border: 1px solid {self._vars['outline']};
+                color: {self._vars['on_surface']};
+            }}
+        """)
+        self._copy_btn.clicked.connect(self._on_copy_clicked)
+        self._layout.addWidget(self._copy_btn)
+
         # Delete today's photo button
         self._delete_btn = QPushButton("Delete")
         self._delete_btn.setObjectName("DeleteButton")
@@ -1213,6 +1246,58 @@ class TodaySelfieInfoBox(LiftMixin, QFrame):
         y = geo.y() + (geo.height() - popup.height()) // 3
         popup.move(x, y)
         popup.show()
+
+    def _on_copy_clicked(self):
+        """Copy today's full-resolution photo file to the system clipboard."""
+        image_path = self._selfie_card.get_image_path()
+        if not image_path:
+            self._show_copy_error("No photo to copy")
+            return
+        try:
+            if not Path(image_path).exists():
+                self._show_copy_error("Photo file not found")
+                return
+            # Full-res original (never the display thumbnail)
+            image = QImage(str(image_path))
+            if image.isNull():
+                self._show_copy_error("Could not read photo file")
+                return
+            QApplication.clipboard().setImage(image)
+            self._show_copied_feedback()
+        except Exception as e:
+            logger.warning("copy_to_clipboard_failed", extra={"meta": {"error": str(e)}})
+            self._show_copy_error(e)
+
+    def _toast(self, level: str, message: str):
+        """Show an ErrorToast centered over the window (shared positioning)."""
+        from gui.widgets.error_popup import ErrorToast
+
+        popup = ErrorToast(self, level=level, message=message)
+
+        geo = self.window().geometry()
+        x = geo.x() + (geo.width() - popup.width()) // 2
+        y = geo.y() + (geo.height() - popup.height()) // 3
+        popup.move(x, y)
+        popup.show()
+
+    def _show_copied_feedback(self):
+        """Transient INFO toast confirming the copy (non-animated)."""
+        try:
+            self._toast("INFO", "Copied to clipboard")
+        except Exception:
+            pass
+
+    def _show_copy_error(self, error):
+        """Show an ErrorToast when copying the photo fails."""
+        try:
+            self._toast("ERROR", f"Failed to copy photo: {error}")
+        except Exception:
+            pass
+
+    def has_copy_target(self):
+        """True when a today-selfie path is set (shortcut/button gate)."""
+        return getattr(self, "_selfie_card", None) is not None and \
+            self._selfie_card.get_image_path() is not None
 
     def _clear_and_show_placeholder(self):
         """Clear content and show no selfie placeholder."""
@@ -1294,6 +1379,7 @@ class DashboardSurface(QFrame):
 
         # Info Box (between selfie and side column)
         info_box = TodaySelfieInfoBox(today_selfie_card)
+        self._info_box = info_box
         # Forward retake request
         info_box.retakeRequested.connect(self.retakeRequested.emit)
         # Forward delete request
@@ -1352,9 +1438,25 @@ class DashboardPage(QWidget):
         self._refreshing = False
         self._build_surface()
 
+        # Ctrl+Shift+C: copy today's photo — scoped to this page only so it
+        # never fires while other pages are focused. No selfie → no-op.
+        self._copy_shortcut = QShortcut(QKeySequence("Ctrl+Shift+C"), self)
+        self._copy_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+        self._copy_shortcut.activated.connect(self._trigger_copy_to_clipboard)
+
         controller = getattr(theme_vars(), "_controller", None)
         if controller is not None:
             controller.themeChanged.connect(self.refresh)
+
+    def _trigger_copy_to_clipboard(self):
+        """Shortcut handler: resolve the live info box (surface rebuilds on
+        refresh/theme change) and copy; silently no-op without a target."""
+        surface = self._surface
+        if surface is None:
+            return
+        info_box = getattr(surface, "_info_box", None)
+        if info_box is not None and info_box.has_copy_target():
+            info_box._on_copy_clicked()
     
     def _build_surface(self):
         """Build or rebuild the dashboard surface."""

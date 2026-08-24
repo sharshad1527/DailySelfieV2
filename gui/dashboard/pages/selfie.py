@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt, QByteArray, QBuffer, QIODevice, QSize, QTimer, QE
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, 
     QPushButton, QTextEdit, QButtonGroup, QGridLayout,
-    QGraphicsOpacityEffect, QFrame, QSizePolicy
+    QGraphicsOpacityEffect, QFrame, QSizePolicy, QDialog
 )
 from PySide6.QtGui import QPixmap, QImage, QPainter, QPainterPath, QFont, QIcon, QMovie
 
@@ -15,6 +15,7 @@ from PySide6.QtGui import QPixmap, QImage, QPainter, QPainterPath, QFont, QIcon,
 from core.capture import check_if_already_captured, commit_capture_from_bytes
 from core.index_api import get_api
 from core.logging import get_logger
+from core.quality import WARNING_MESSAGES, assess_image_quality
 from core.config import ensure_config, apply_config_to_paths, write_config
 from core.paths import get_app_paths
 
@@ -42,6 +43,87 @@ MOOD_GIF_MAP = {
     "Bad": "sad.gif",
     "Awful": "sosad.gif",
 }
+
+
+class QualityAdvisoryDialog(QDialog):
+    """Frameless advisory card for failed quality checks, styled like the
+    calendar ConfirmDeleteDialog (dark card, left accent border). Advisory
+    only: Save Anyway (accept) always commits; Retake (reject) aborts."""
+
+    def __init__(self, warnings, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setModal(True)
+        v = theme_vars()
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(15, 15, 15, 15)
+
+        container = QFrame()
+        container.setObjectName("Container")
+        container.setStyleSheet(f"""
+            QFrame#Container {{
+                background-color: {v['surface_container_low']};
+                border: 2px solid {v['outline_variant']};
+                border-left: 4px solid {v['error']};
+                border-radius: 14px;
+            }}
+            QLabel {{ color: {v['on_surface']}; border: none; }}
+        """)
+        outer.addWidget(container)
+
+        col = QVBoxLayout(container)
+        col.setContentsMargins(16, 16, 16, 16)
+        col.setSpacing(8)
+
+        title = QLabel("Check your photo")
+        title.setStyleSheet(f"color: {v['error']}; font-size: 14px; font-weight: bold;")
+        col.addWidget(title)
+
+        body = QLabel("\n".join(WARNING_MESSAGES.get(w, w) for w in warnings))
+        body.setStyleSheet(f"color: {v['on_surface_variant']}; font-size: 13px;")
+        col.addWidget(body)
+
+        col.addSpacing(4)
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+
+        retake_btn = QPushButton("Retake")
+        retake_btn.setCursor(Qt.PointingHandCursor)
+        retake_btn.setFixedHeight(32)
+        retake_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {v['surface_container_high']};
+                color: {v['on_surface_variant']};
+                border: 1px solid {v['outline_variant']};
+                border-radius: 16px;
+                padding: 0 12px; font-size: 11px; font-weight: 500;
+            }}
+            QPushButton:hover {{
+                background-color: {v['surface_container_highest']};
+                color: {v['on_surface']};
+                border-color: {v['outline']};
+            }}
+        """)
+        retake_btn.clicked.connect(self.reject)
+        btn_row.addWidget(retake_btn)
+        btn_row.addStretch()
+
+        save_btn = QPushButton("Save Anyway")
+        save_btn.setCursor(Qt.PointingHandCursor)
+        save_btn.setFixedHeight(32)
+        save_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {v['primary']}; color: {v['on_primary']};
+                border: none; border-radius: 16px;
+                padding: 0 12px; font-size: 11px; font-weight: 600;
+            }}
+        """)
+        save_btn.clicked.connect(self.accept)
+        btn_row.addWidget(save_btn)
+
+        col.addLayout(btn_row)
 
 class SelfiePage(QWidget):
     """
@@ -719,6 +801,20 @@ class SelfiePage(QWidget):
         quality = self.config.get("behavior", {}).get("quality", 100)
         self._current_qimage.save(buffer, "JPG", quality)
         jpg_data = byte_array.data()
+
+        # Advisory quality gate: score the encoded frame before committing.
+        # Analysis errors skip the gate (log info, never block the save).
+        if self.config.get("behavior", {}).get("quality_gate_enabled", True):
+            warnings = []
+            try:
+                warnings = assess_image_quality(bytes(jpg_data))["warnings"]
+            except Exception as e:
+                get_logger("gui.selfie").info("Quality gate skipped: %s", e)
+            else:
+                if warnings:
+                    dlg = QualityAdvisoryDialog(warnings, self.window())
+                    if not dlg.exec():
+                        return  # Retake chosen: stay in preview, commit nothing
 
         selected_mood = None
         if self.mood_group.checkedButton():
