@@ -107,6 +107,9 @@ def app_paths(ds_sandbox):
 @pytest.fixture()
 def set_tz(monkeypatch):
     """Factory fixture: set_tz('Asia/Kolkata') — process TZ change with restore."""
+    # Follow-up: inject zoneinfo.ZoneInfo into timeutils instead of process-global TZ so these run cross-platform later.
+    if not hasattr(time, "tzset"):
+        pytest.skip("process-wide TZ switching needs time.tzset (POSIX-only)")
     original_tz = os.environ.get("TZ")
 
     def _set(zone: str) -> None:

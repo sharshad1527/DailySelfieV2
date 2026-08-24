@@ -1,0 +1,82 @@
+# DailySelfie CI — core test suite on every push/PR to dashboard & main.
+#
+# Design notes for future maintainers:
+# - Tests are CORE-ONLY (see tests/conftest.py: "No network, no Qt, no camera").
+#   No QApplication/QGuiApplication is created and neither PySide6 nor cv2 is
+#   imported at collection time (all such imports in core/ are lazy).
+# - We still set QT_QPA_PLATFORM=offscreen on every OS as cheap insurance: if a
+#   future test ever instantiates a QGuiApplication, Linux won't die trying to
+#   open an X display.
+# - Windows matters: this repo has shipped Windows-only bugs before
+#   (pylnk3-class issues), so both OSes must stay green independently.
+
+name: CI
+
+# Quoted "on" so YAML 1.1 parsers (PyYAML etc.) don't coerce it to boolean True.
+"on":
+  push:
+    branches: [dashboard, main]
+  pull_request:
+    branches: [dashboard, main]
+
+# Cancel superseded runs on the same branch/PR to save runner minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: pytest (${{ matrix.os }})
+    # fail-fast false: one OS failing must not hide the other's result —
+    # platform-specific regressions are exactly what we want to surface here.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+
+    env:
+      # GUI-less safety net for any future Qt touchpoint in the suite.
+      QT_QPA_PLATFORM: offscreen
+      # Keep Python chatty-free but deterministic.
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13 (matches dev environment)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip            # cache the pip download wheelhouse keyed on requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+        # Note: requirements.txt uses `pylnk3; sys_platform == "win32"` so the
+        # Windows job gets it and Ubuntu skips it — verified pure-Python, no
+        # compiler needed on either OS.
+
+      # Linux-only: opencv-python wheels are headless-unfriendly and can demand
+      # libGL.so.1 / glib at import time even when nothing visibly imports cv2.
+      # Install preemptively instead of debugging a red build later.
+      - name: Install system libs for OpenCV (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0
+
+      # Fast syntax gate over the real source trees (not tests): catches
+      # "edited on one OS, broke syntax" and stray merge artifacts in seconds,
+      # before pytest spends time collecting.
+      - name: Compile gate (syntax check)
+        run: python -m compileall -q core gui DailySelfie.py
+
+      - name: Run test suite (core-only, offline, sandboxed)
+        run: python -m pytest tests/ -q --tb=short
+        # Same invocation validated locally on 3.13: `QT_QPA_PLATFORM=offscreen
+        # python -m pytest tests/ -q --tb=short` -> 59 passed.
