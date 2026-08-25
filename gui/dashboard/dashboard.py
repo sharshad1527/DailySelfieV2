@@ -43,7 +43,9 @@ class DashboardWindow(DashboardShell):
         
         # Store page references for signal connections
         self._selfie_page = SelfiePage()
-        self._dashboard_page = DashboardPage()
+        # Pass the config-applied paths so the today-card glob + photos
+        # watcher target the same photos_root the popup captures into.
+        self._dashboard_page = DashboardPage(app_paths=app_paths)
         self._calendar_page = CalendarPage(
             theme_controller=theme_controller,
             cfg=cfg,

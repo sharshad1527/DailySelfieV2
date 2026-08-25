@@ -16,6 +16,7 @@ from gui.dashboard.widgets.mood_trend_chart import MoodTrendChart, play_entrance
 from core.capture import check_if_already_captured
 from core.storage import delete_path
 from core.paths import get_app_paths
+from core.config import ensure_config, apply_config_to_paths
 from core.thumbs import load_display_pixmap
 from core.index_api import get_api
 from core.streak import calculate_streaks
@@ -52,6 +53,22 @@ def _blend_over(top_hex: str, base_hex: str, alpha: float) -> str:
                   mix(top.blue(), base.blue())).name()
 
 
+def _resolve_app_paths(app_paths=None):
+    """Config-applied AppPaths: explicit argument wins, else bootstrap+config.
+
+    The popup and selfie page save through apply_config_to_paths() (honouring
+    [installation] overrides), so the raw get_app_paths() OS defaults
+    (e.g. ~/Pictures) diverge from the real photos_root on every installed
+    layout. Today-card globbing and the photos watcher must target the SAME
+    root captures are written to, or today's capture stays invisible.
+    """
+    if app_paths is not None:
+        return app_paths
+    bootstrap = get_app_paths("DailySelfie", ensure=False)
+    cfg = ensure_config(bootstrap.config_dir)
+    return apply_config_to_paths(bootstrap, cfg)
+
+
 class TodaySelfieCard(LiftMixin, QFrame):
     """
     Primary dashboard card showing today's selfie (image fills the card).
@@ -63,7 +80,7 @@ class TodaySelfieCard(LiftMixin, QFrame):
     # border outline_variant→outline to match the painted photo border.
     LIFT_IMAGE_CARD = True
 
-    def __init__(self):
+    def __init__(self, app_paths=None):
         super().__init__()
         self._vars = theme_vars()
         self._image_path = None
@@ -72,6 +89,9 @@ class TodaySelfieCard(LiftMixin, QFrame):
         self._render_key = None  # (path, w, h, dpr) of the last decoded pixmap
         self._state_is_empty = False  # True once the empty-state UI is built
         self.take_selfie_btn = None  # Initialize to None
+        # Config-applied paths: same resolution chain as the capture popup,
+        # so the today-glob reads the photos_root captures land in.
+        self._app_paths = _resolve_app_paths(app_paths)
 
         self.setObjectName("TodaySelfieCard")
         self.setMinimumHeight(250)
@@ -103,7 +123,7 @@ class TodaySelfieCard(LiftMixin, QFrame):
         are cheap no-ops.
         """
         try:
-            app_paths = get_app_paths("DailySelfie", ensure=True)
+            app_paths = self._app_paths
             # Photos are saved under app_paths.photos_root by capture
             # (see core/capture.py); never compose data_dir/"photos".
             # Timezone-aware LOCAL-day lookup (UTC-named files).
@@ -425,10 +445,10 @@ class OnThisDayBanner(LiftMixin, QFrame):
         self.init_lift()
 
     @classmethod
-    def create(cls):
+    def create(cls, app_paths=None):
         """Build a banner for today's throwback capture, or None when no match."""
         try:
-            app_paths = get_app_paths("DailySelfie", ensure=True)
+            app_paths = _resolve_app_paths(app_paths)
             entry = get_api(app_paths).get_on_this_day()
         except Exception:
             return None
@@ -457,10 +477,11 @@ class StreakSummaryWidget(LiftMixin, QFrame):
     """
     Read-only summary showing current and longest streak with status icon.
     """
-    def __init__(self):
+    def __init__(self, app_paths=None):
         super().__init__()
 
         self._vars = theme_vars()
+        self._app_paths = _resolve_app_paths(app_paths)
 
         self.setObjectName("StreakSummaryWidget")
         self.setMinimumHeight(90)
@@ -590,8 +611,7 @@ class StreakSummaryWidget(LiftMixin, QFrame):
     def _get_streaks(self) -> Tuple[int, int, bool]:
         """Fetch dates from DB and calculate streaks."""
         try:
-            app_paths = get_app_paths("DailySelfie", ensure=True)
-            api = get_api(app_paths)
+            api = get_api(self._app_paths)
             dates = api.get_all_capture_dates()
             return calculate_streaks(dates)
         except Exception:
@@ -606,11 +626,12 @@ class MoodSummaryWidget(LiftMixin, QFrame):
     # Order of moods for display (positive to negative)
     MOOD_ORDER = ["Great", "Good", "Neutral", "Bad", "Awful"]
     
-    def __init__(self):
+    def __init__(self, app_paths=None):
         super().__init__()
 
         self._vars = theme_vars()
         self._movies = []  # Keep references to QMovie objects
+        self._app_paths = _resolve_app_paths(app_paths)
 
         self.setObjectName("MoodSummaryWidget")
         self.setMinimumHeight(90)
@@ -768,8 +789,7 @@ class MoodSummaryWidget(LiftMixin, QFrame):
         Returns: (7_day_counts: dict, 30_day_counts: dict, days_available: int)
         """
         try:
-            app_paths = get_app_paths("DailySelfie", ensure=True)
-            api = get_api(app_paths)
+            api = get_api(self._app_paths)
 
             # Get moods for last 7 days
             moods_7_raw = api.get_moods_since(7)
@@ -808,10 +828,11 @@ class MoodTrendCard(LiftMixin, QFrame):
     """
     CHART_DAYS = 14
 
-    def __init__(self):
+    def __init__(self, app_paths=None):
         super().__init__()
         self._vars = theme_vars()
         self._entered = False
+        self._app_paths = _resolve_app_paths(app_paths)
 
         self.setObjectName("MoodTrendCard")
         self.setMinimumHeight(108)
@@ -844,8 +865,7 @@ class MoodTrendCard(LiftMixin, QFrame):
 
     def refresh_data(self):
         try:
-            app_paths = get_app_paths("DailySelfie", ensure=True)
-            rows = get_api(app_paths).get_moods_since(self.CHART_DAYS)
+            rows = get_api(self._app_paths).get_moods_since(self.CHART_DAYS)
         except Exception:
             rows = []
         self._chart.set_moods(rows, days=self.CHART_DAYS)
@@ -1239,7 +1259,8 @@ class TodaySelfieInfoBox(LiftMixin, QFrame):
         
         # Record deletion in the index API
         try:
-            app_paths = get_app_paths("DailySelfie", ensure=True)
+            app_paths = getattr(self._selfie_card, "_app_paths", None) \
+                or _resolve_app_paths()
             api = get_api(app_paths)
             api.record_deletion(selfie_id, reason="user_deleted")
         except Exception as e:
@@ -1356,10 +1377,11 @@ class DashboardSurface(QFrame):
     photoDeleted = Signal()
     # Signal emitted when the On This Day banner is clicked (carries date)
     throwbackOpenRequested = Signal(object)
-    
-    def __init__(self):
+
+    def __init__(self, app_paths=None):
         super().__init__()
         vars = theme_vars()
+        self._app_paths = _resolve_app_paths(app_paths)
 
         self.setObjectName("DashboardSurface")
 
@@ -1375,7 +1397,7 @@ class DashboardSurface(QFrame):
         surface_layout.setSpacing(12)
 
         # Wave-1: On This Day throwback strip (hidden entirely when no match)
-        banner = OnThisDayBanner.create()
+        banner = OnThisDayBanner.create(self._app_paths)
         if banner is not None:
             # TODO(wave-2 wiring): connect DashboardPage.throwbackOpenRequested
             # in gui/dashboard/dashboard.py → CalendarPage jump-to-day.
@@ -1391,7 +1413,7 @@ class DashboardSurface(QFrame):
         top_section.setSpacing(12)
 
         # Selfie Card (image only, fills the card)
-        today_selfie_card = TodaySelfieCard()
+        today_selfie_card = TodaySelfieCard(app_paths=self._app_paths)
         self._today_card = today_selfie_card
         
         # Connect the card's signal to our signal (forwards the request)
@@ -1409,9 +1431,9 @@ class DashboardSurface(QFrame):
         side_column = QVBoxLayout()
         side_column.setSpacing(12)
 
-        streak_summary_widget = StreakSummaryWidget()
-        mood_summary_widget = MoodSummaryWidget()
-        mood_trend_card = MoodTrendCard()
+        streak_summary_widget = StreakSummaryWidget(app_paths=self._app_paths)
+        mood_summary_widget = MoodSummaryWidget(app_paths=self._app_paths)
+        mood_trend_card = MoodTrendCard(app_paths=self._app_paths)
 
         side_column.addWidget(streak_summary_widget)
         side_column.addWidget(mood_summary_widget)
@@ -1443,7 +1465,7 @@ class DashboardPage(QWidget):
     # CalendarPage on the given day (CalendarPage._jump_to_month + detail).
     throwbackOpenRequested = Signal(object)
     
-    def __init__(self):
+    def __init__(self, app_paths=None):
         super().__init__()
         vars = theme_vars()
 
@@ -1453,7 +1475,11 @@ class DashboardPage(QWidget):
         self._root_layout = QVBoxLayout(self._motion_wrapper)
         self._root_layout.setContentsMargins(12, 12, 12, 12)
         self._root_layout.setSpacing(12)
-        
+
+        # Config-applied paths (window passes the live object; standalone
+        # construction falls back to the bootstrap+config.toml chain) so the
+        # today-card and photos watcher target the real capture root.
+        self._app_paths = _resolve_app_paths(app_paths)
         self._surface = None
         self._refreshing = False
         self._build_surface()
@@ -1506,7 +1532,7 @@ class DashboardPage(QWidget):
             self._surface.deleteLater()
         
         # Create new surface
-        self._surface = DashboardSurface()
+        self._surface = DashboardSurface(self._app_paths)
         # Forward the takeSelfieRequested signal
         self._surface.takeSelfieRequested.connect(self.takeSelfieRequested.emit)
         # Forward the retakeRequested signal
@@ -1542,8 +1568,7 @@ class DashboardPage(QWidget):
     def _photos_watch_targets(self):
         """photos_root + current UTC year/month dirs (files are UTC-named)."""
         try:
-            app_paths = get_app_paths("DailySelfie", ensure=False)
-            root = Path(app_paths.photos_root)
+            root = Path(self._app_paths.photos_root)
             now_utc = datetime.now(timezone.utc)
             year_dir = root / now_utc.strftime("%Y")
             month_dir = year_dir / now_utc.strftime("%m")
@@ -1595,8 +1620,7 @@ class DashboardPage(QWidget):
         self._last_external_check = now
 
         try:
-            app_paths = get_app_paths("DailySelfie", ensure=True)
-            exists, disk_path = check_if_already_captured(app_paths)
+            exists, disk_path = check_if_already_captured(self._app_paths)
         except Exception:
             return
 
