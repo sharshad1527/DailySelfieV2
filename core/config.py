@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import platform
 import tempfile
+import copy
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -93,7 +94,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # bright. Advisory-only; user can always save. Passthrough bool like
         # allow_retake: no _validate_behavior coercion needed — TOML emits
         # native bools and _deep_merge fills absent keys from defaults.
-        "quality_gate_enabled": True
+        "quality_gate_enabled": True,
+
+        # Highlights & recaps (dashboard chips / entry points). Dismissed chip
+        # ids and already-viewed recap period ids are sanitized string lists.
+        "highlights_enabled": True,
+        "dismissed_highlights": [],
+        "recap_seen": [],
     },
     "theme": {
     "name": "material-theme",
@@ -121,6 +128,20 @@ def _normalize_paths(cfg: Dict[str, Any]) -> None:
     for key in ("install_dir", "venv_dir", "data_dir", "logs_dir", "photos_root"):
         if key in inst and isinstance(inst[key], str):
             inst[key] = _expand_path(inst[key])
+
+
+def _sanitize_string_list(value: Any, cap: int = 64) -> List[str]:
+    """Keep string items only, deduped in order, capped at the newest `cap`."""
+    if not isinstance(value, (list, tuple)):
+        return []
+    out: List[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item or item in out:
+            continue
+        out.append(item)
+        if len(out) >= max(0, int(cap)):
+            break
+    return out
 
 
 def _validate_behavior(cfg: Dict[str, Any]) -> None:
@@ -151,6 +172,17 @@ def _validate_behavior(cfg: Dict[str, Any]) -> None:
         behavior["motion_enabled"] = me.strip().lower() not in ("0", "false", "off", "no")
     else:
         behavior["motion_enabled"] = bool(me)
+
+    # Highlights & recaps: bool + sanitized string-list keys
+    he = behavior.get("highlights_enabled", True)
+    if isinstance(he, str):
+        behavior["highlights_enabled"] = he.strip().lower() not in ("0", "false", "off", "no")
+    else:
+        behavior["highlights_enabled"] = bool(he)
+
+    behavior["dismissed_highlights"] = _sanitize_string_list(
+        behavior.get("dismissed_highlights", []))
+    behavior["recap_seen"] = _sanitize_string_list(behavior.get("recap_seen", []))
 
 
 def _deep_merge(default: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
@@ -225,7 +257,7 @@ def load_config(config_path: Path) -> Dict[str, Any]:
     Does NOT write to disk.
     """
     if not config_path.exists():
-        cfg = dict(DEFAULT_CONFIG)
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
         _normalize_paths(cfg)
         _validate_behavior(cfg)
         return cfg
@@ -305,7 +337,7 @@ def ensure_config(config_dir: Path) -> Dict[str, Any]:
     config_path = config_dir / "config.toml"
 
     if not config_path.exists():
-        cfg = dict(DEFAULT_CONFIG)
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
         _normalize_paths(cfg)
         _validate_behavior(cfg)
         write_config(config_path, cfg)

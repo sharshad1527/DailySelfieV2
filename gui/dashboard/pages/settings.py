@@ -47,8 +47,11 @@ from core.autostart_manager import set_autostart
 from core.camera import list_cameras
 from core.config import load_config, write_config
 from core.desktop_entry_manager import set_desktop_entry
+from core.index_api import get_api
 from core.logging import get_logger
 from core.paths import AppPaths, get_app_paths
+from core.recap import recap_eligible_periods
+from gui.theme import motion_tokens as mt
 from gui.theme.theme_vars import theme_vars
 from gui.widgets.error_popup import ErrorToast
 from gui.widgets.motion import install_motion_wrapper
@@ -64,6 +67,7 @@ _ROW_KEYS: Dict[str, str] = {
     "quality": "behavior",
     "timer_duration": "behavior",
     "allow_retake": "behavior",
+    "highlights_enabled": "behavior",
 }
 
 TIMER_MIN, TIMER_MAX = 0, 60
@@ -669,6 +673,8 @@ class ButtonRow(QWidget):
 class SettingsPage(QWidget):
     """Scrollable single-column settings surface with instant-apply persistence."""
 
+    recapLaunchRequested = Signal(tuple)
+
     def __init__(self, theme_controller=None, cfg: Optional[Dict[str, Any]] = None,
                  config_path=None, app_paths: Optional[AppPaths] = None):
         super().__init__()
@@ -870,6 +876,39 @@ class SettingsPage(QWidget):
         self._themed.append(self._camera_row)
         self._themed.extend(self._behavior_rows)
         column.addWidget(card)
+
+        # --- Highlights & Recaps section ---
+        hl_card = self._register_section(SectionCard("Highlights & Recaps"))
+
+        self._highlights_row = ToggleRow(
+            "Highlights",
+            "Show recap and highlight suggestions on the dashboard",
+            "highlights_enabled", bool(beh.get("highlights_enabled", True)),
+        )
+        self._highlights_row.settingChanged.connect(self._on_row_setting_changed)
+        hl_card.add(self._highlights_row)
+
+        self._recap_anim_row = ToggleRow(
+            "Recap animations",
+            "Follows the Motion setting (gui/theme motion gate)",
+            "motion_enabled", mt.is_motion_enabled(self.cfg),
+        )
+        self._recap_anim_row.set_checked_silent(mt.is_motion_enabled(self.cfg))
+        self._recap_anim_row.set_enabled_state(False)  # informational mirror
+        hl_card.add(self._recap_anim_row)
+
+        self._recap_launch_row = ButtonRow(
+            "Monthly recap", "Rewatch a finished month as a story deck",
+        )
+        self._recap_launch_btn = self._recap_launch_row.add_button(
+            "View your recap…", self._launch_recap)
+        hl_card.add(self._recap_launch_row)
+
+        self._themed.append(self._highlights_row)
+        self._themed.append(self._recap_anim_row)
+        self._themed.append(self._recap_launch_row)
+        column.addWidget(hl_card)
+        self._refresh_recap_availability()
 
     def _build_system(self, column: QVBoxLayout):
         card = self._register_section(SectionCard("System"))
@@ -1229,11 +1268,36 @@ class SettingsPage(QWidget):
     # ---------------------------------------------------------
     def showEvent(self, event):
         super().showEvent(event)
+        self._refresh_recap_availability()
         if not self._probed_once:
             self._probed_once = True
             # Guarded: the timer must not fire into a torn-down page.
             generation = self._teardown_generation
             QTimer.singleShot(200, lambda: self._deferred_probe(generation))
+
+    # ---------------------------------------------------------
+    # Highlights & recaps
+    # ---------------------------------------------------------
+    def _refresh_recap_availability(self):
+        """Enable 'View your recap…' iff any eligible period exists (§4)."""
+        try:
+            periods = recap_eligible_periods(get_api(self.app_paths))
+        except Exception:
+            periods = []
+        self._eligible_periods = list(periods)
+        eligible = bool(periods)
+        try:
+            self._recap_launch_btn.setEnabled(eligible)
+            self._recap_launch_row.desc_lbl.setText(
+                "Rewatch a finished month as a story deck" if eligible
+                else "Unlocks after your first full month with 5+ capture days")
+        except RuntimeError:
+            pass  # page torn down
+
+    def _launch_recap(self):
+        periods = getattr(self, "_eligible_periods", None)
+        if periods:
+            self.recapLaunchRequested.emit(tuple(periods[0]))
 
     def _deferred_probe(self, generation: int):
         # Pure-Python generation check first: safe even post-destruction.

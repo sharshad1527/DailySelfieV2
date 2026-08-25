@@ -132,6 +132,13 @@ def main(argv=None):
     from core.logging import global_exception_hook
     sys.excepthook = global_exception_hook
 
+    # QApplication must exist before ANY QObject is constructed (e.g.
+    # ThemeController below); constructing QObject-first warns/crashes on
+    # some PySide6 versions. Create-or-reuse here so every downstream mode
+    # (GUI and headless) sees a valid QCoreApplication.instance().
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication(sys.argv)
+
     argv = argv if argv is not None else sys.argv[1:]
 
     # 1. Bootstrap: Resolve paths relative to OS (before config is loaded)
@@ -361,13 +368,13 @@ def main(argv=None):
         init_theme_vars(theme_controller)
 
         # ---- THEN GUI IMPORTS ----
-        from PySide6.QtWidgets import QApplication
         from gui.startup.startup_window import StartupWindow
         from PySide6.QtGui import QIcon
         import ctypes
 
 
-        app = QApplication(sys.argv)
+        # Reuse the QApplication created at the top of main() — never a second one.
+        app = QApplication.instance()
         app.setApplicationName("Selfie Time")
         app.setApplicationDisplayName("Selfie Time")
 
@@ -416,14 +423,14 @@ def main(argv=None):
         init_theme_vars(theme_controller)
 
         # ---- THEN GUI IMPORTS ----
-        from PySide6.QtWidgets import QApplication
         from gui.dashboard.dashboard import DashboardWindow
         from PySide6.QtGui import QIcon
         import ctypes
 
 
 
-        app = QApplication(sys.argv)
+        # Reuse the QApplication created at the top of main() — never a second one.
+        app = QApplication.instance()
         app.setApplicationName("Dashboard")
         app.setApplicationDisplayName("Dashboard")
         app.setDesktopFileName("DailySelfie")

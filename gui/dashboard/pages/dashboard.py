@@ -1,8 +1,9 @@
 # gui/dashboard/pages/dashboard.py
+import calendar as pycal
 import time
-from datetime import datetime, timezone
+from datetime import date as date_cls, datetime, timezone
 from pathlib import Path
-from typing import Tuple
+from typing import List, Set, Tuple
 
 from PySide6.QtCore import Qt, QSize, Signal, QTimer, QFileSystemWatcher
 from PySide6.QtGui import QPixmap, QIcon, QPainter, QMovie, QColor, QImage, QKeySequence, QShortcut
@@ -12,11 +13,20 @@ from gui.theme.theme_vars import theme_vars
 from gui.widgets.lift_mixin import LiftMixin
 from gui.widgets.motion import install_motion_wrapper
 from gui.widgets.pixmap_utils import active_dpr, recolored_icon, rounded_corners, scaled_cover_crop
+from gui.dashboard.widgets.highlight_chip import HighlightChip, RecapEntryCard
 from gui.dashboard.widgets.mood_trend_chart import MoodTrendChart, play_entrance_fade
 from core.capture import check_if_already_captured
 from core.storage import delete_path
 from core.paths import get_app_paths
-from core.config import ensure_config, apply_config_to_paths
+from core.config import ensure_config, apply_config_to_paths, load_config, write_config
+from core.recap import (
+    MILESTONE_RUNGS,
+    comeback_signal,
+    mood_shift,
+    recap_eligible_periods,
+    recap_period_id,
+    streak_record_active,
+)
 from core.thumbs import load_display_pixmap
 from core.index_api import get_api
 from core.streak import calculate_streaks
@@ -471,6 +481,179 @@ class OnThisDayBanner(LiftMixin, QFrame):
         if event.button() == Qt.LeftButton and self._day is not None:
             self.openRequested.emit(self._day)
         super().mouseReleaseEvent(event)
+
+
+def _remember_behavior_list(config_path, key: str, value: str,
+                            cap: int = 64) -> bool:
+    """Append `value` to behavior[key] (dedupe, keep newest cap) atomically."""
+    try:
+        cfg = load_config(Path(config_path))
+        beh = cfg.setdefault("behavior", {})
+        items = [i for i in beh.get(key, []) if isinstance(i, str)]
+        if value in items:
+            return True
+        items.append(value)
+        beh[key] = items[-max(1, int(cap)):]
+        write_config(Path(config_path), cfg)
+        return True
+    except Exception as e:
+        logger.warning("behavior_list_persist_failed",
+                       extra={"meta": {"key": key, "error": str(e)}})
+        return False
+
+
+class HighlightStrip(QWidget):
+    """Highlights arbiter (§3): recap_ready chip > up to 3 chips >
+    OnThisDayBanner > collapse to 0. Dismissals persist to
+    behavior.dismissed_highlights; recap eligibility is shared with the
+    side-column entry card via eligibilityChanged."""
+
+    chipActivated = Signal(str)
+    recapLaunchRequested = Signal(tuple)
+    dismissedId = Signal(str)
+    throwbackOpenRequested = Signal(object)
+    eligibilityChanged = Signal(list, set)
+
+    MAX_CHIPS = 3
+
+    def __init__(self, app_paths=None, config_path=None, parent=None):
+        super().__init__(parent)
+        self._app_paths = _resolve_app_paths(app_paths)
+        self._config_path = (Path(config_path) if config_path else
+                             Path(self._app_paths.config_dir) / "config.toml")
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(6)
+        self.hide()
+
+    # ---- data ---------------------------------------------------------
+    def _load_behavior(self) -> dict:
+        try:
+            return load_config(self._config_path).get("behavior", {})
+        except Exception:
+            return {}
+
+    def recompute(self):
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        beh = self._load_behavior()
+        enabled = bool(beh.get("highlights_enabled", True))
+        seen: Set[str] = {i for i in beh.get("recap_seen", [])
+                          if isinstance(i, str)}
+        dismissed: Set[str] = {i for i in beh.get("dismissed_highlights", [])
+                               if isinstance(i, str)}
+
+        periods: List[Tuple] = []
+        dates: List[str] = []
+        moods: List[dict] = []
+        api = None
+        try:
+            api = get_api(self._app_paths)
+            if enabled:
+                periods = recap_eligible_periods(api)
+            dates = api.get_all_capture_dates()
+            moods = api.get_moods_since(60)
+        except Exception:
+            logger.debug("highlight_inputs_unavailable", exc_info=True)
+
+        self.eligibilityChanged.emit(list(periods), seen)
+        today = date_cls.today()
+        built = False
+
+        if enabled:
+            # 1) recap_ready — newest eligible period not yet seen or dismissed
+            ready = next((p for p in periods
+                          if recap_period_id(p) not in seen
+                          and recap_period_id(p) not in dismissed), None)
+            if ready is not None:
+                kind, y, m = (list(ready) + [None])[:3]
+                label = (f"Your {pycal.month_name[int(m)]} recap is ready"
+                         if m else f"Your {int(y)} recap is ready")
+                chip = HighlightChip(
+                    "recap_ready", label,
+                    reason="A finished month is ready to rewatch",
+                    dismiss_id=recap_period_id(ready),
+                    icon_name="sparkles.svg", emphasis=True, hint="")
+                chip.activated.connect(
+                    lambda _k, p=tuple(ready): self.recapLaunchRequested.emit(p))
+                chip.dismissed.connect(self._on_dismissed)
+                policy = chip.sizePolicy()
+                policy.setHorizontalPolicy(QSizePolicy.Expanding)
+                chip.setSizePolicy(policy)
+                self._layout.addWidget(chip)
+                built = True
+            else:
+                # 2) scored chips (cap 3, drop lowest)
+                candidates: List[Tuple[int, str, str, str, str, str]] = []
+                current, best, has_today = calculate_streaks(dates)
+                for rung in sorted(MILESTONE_RUNGS, reverse=True):
+                    mid = f"milestone:{rung}"
+                    if current >= rung and mid not in dismissed:
+                        candidates.append((
+                            80, mid, f"{rung}-day streak",
+                            f"Your current streak crossed the {rung}-day milestone",
+                            "streak.svg", "primary"))
+                        break
+                rid = "new_record"
+                if rid not in dismissed and streak_record_active(dates,
+                                                                 today=today):
+                    candidates.append((
+                        90, rid, "New personal record",
+                        f"{current} days — your longest streak yet",
+                        "celebration.svg", "tertiary"))
+                cb = comeback_signal(dates, today=today)
+                if cb is not None and "comeback" not in dismissed:
+                    candidates.append((
+                        60, "comeback", cb.title, cb.subtitle,
+                        "selfie.svg", "secondary"))
+                shift = mood_shift(moods, today=today)
+                if shift is not None and "mood_shift" not in dismissed:
+                    candidates.append((
+                        50, "mood_shift", shift.title, shift.subtitle,
+                        "light.svg", "secondary"))
+
+                candidates.sort(key=lambda c: -c[0])
+                kept = candidates[:self.MAX_CHIPS]
+                if kept:
+                    row_holder = QWidget()
+                    row = QHBoxLayout(row_holder)
+                    row.setContentsMargins(0, 0, 0, 0)
+                    row.setSpacing(6)
+                    row.addStretch()
+                    for score, did, label, reason, icon, color_key \
+                            in reversed(kept):
+                        chip = HighlightChip(
+                            did.split(":", 1)[0], label, reason=reason,
+                            dismiss_id=did, icon_name=icon,
+                            color_key=color_key)
+                        chip.activated.connect(self.chipActivated.emit)
+                        chip.dismissed.connect(self._on_dismissed)
+                        row.insertWidget(0, chip)
+                    self._layout.addWidget(row_holder)
+                    built = True
+
+        # 3) OnThisDay fallback (kept even with highlights disabled)
+        if not built:
+            banner = OnThisDayBanner.create(self._app_paths)
+            if banner is not None:
+                banner.openRequested.connect(self.throwbackOpenRequested.emit)
+                self._layout.addWidget(banner)
+                built = True
+
+        self.setVisible(built)
+
+    def refresh_highlights(self):
+        self.recompute()
+
+    def _on_dismissed(self, dismiss_id: str):
+        _remember_behavior_list(self._config_path, "dismissed_highlights",
+                                dismiss_id)
+        self.dismissedId.emit(dismiss_id)
+        self.recompute()
 
 
 class StreakSummaryWidget(LiftMixin, QFrame):
@@ -1377,11 +1560,16 @@ class DashboardSurface(QFrame):
     photoDeleted = Signal()
     # Signal emitted when the On This Day banner is clicked (carries date)
     throwbackOpenRequested = Signal(object)
+    # Highlight strip forwards (§3/§8)
+    chipActivated = Signal(str)
+    recapLaunchRequested = Signal(tuple)
 
-    def __init__(self, app_paths=None):
+    def __init__(self, app_paths=None, config_path=None):
         super().__init__()
         vars = theme_vars()
         self._app_paths = _resolve_app_paths(app_paths)
+        self._config_path = (Path(config_path) if config_path else
+                             Path(self._app_paths.config_dir) / "config.toml")
 
         self.setObjectName("DashboardSurface")
 
@@ -1396,18 +1584,20 @@ class DashboardSurface(QFrame):
         surface_layout.setContentsMargins(12, 12, 12, 12)
         surface_layout.setSpacing(12)
 
-        # Wave-1: On This Day throwback strip (hidden entirely when no match)
-        banner = OnThisDayBanner.create(self._app_paths)
-        if banner is not None:
-            # TODO(wave-2 wiring): connect DashboardPage.throwbackOpenRequested
-            # in gui/dashboard/dashboard.py → CalendarPage jump-to-day.
-            banner.openRequested.connect(self.throwbackOpenRequested.emit)
-            surface_layout.addWidget(banner)
+        # Highlights arbiter: recap_ready chip > chips > OnThisDay banner
+        self._strip = HighlightStrip(app_paths=self._app_paths,
+                                     config_path=self._config_path)
+        self._strip.chipActivated.connect(self.chipActivated.emit)
+        self._strip.recapLaunchRequested.connect(self.recapLaunchRequested.emit)
+        self._strip.throwbackOpenRequested.connect(
+            self.throwbackOpenRequested.emit)
+        surface_layout.addWidget(self._strip)
 
         # Top Section Container - expanding to fill available space
         top_section_container = QWidget()
         top_section_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        
+        self._top_section_container = top_section_container
+
         top_section = QHBoxLayout(top_section_container)
         top_section.setContentsMargins(0, 0, 0, 0)
         top_section.setSpacing(12)
@@ -1415,7 +1605,7 @@ class DashboardSurface(QFrame):
         # Selfie Card (image only, fills the card)
         today_selfie_card = TodaySelfieCard(app_paths=self._app_paths)
         self._today_card = today_selfie_card
-        
+
         # Connect the card's signal to our signal (forwards the request)
         today_selfie_card.takeSelfieRequested.connect(self.takeSelfieRequested.emit)
 
@@ -1427,7 +1617,7 @@ class DashboardSurface(QFrame):
         # Forward delete request
         info_box.delete_requested.connect(self.photoDeleted.emit)
 
-        # Side Column: Streak + Mood
+        # Side Column: Streak + Mood (+ height-gated recap entry)
         side_column = QVBoxLayout()
         side_column.setSpacing(12)
 
@@ -1435,9 +1625,16 @@ class DashboardSurface(QFrame):
         mood_summary_widget = MoodSummaryWidget(app_paths=self._app_paths)
         mood_trend_card = MoodTrendCard(app_paths=self._app_paths)
 
+        recap_entry = RecapEntryCard()
+        recap_entry.recapLaunchRequested.connect(
+            self.recapLaunchRequested.emit)
+        self._strip.eligibilityChanged.connect(recap_entry.set_eligible)
+        self._recap_entry = recap_entry
+
         side_column.addWidget(streak_summary_widget)
         side_column.addWidget(mood_summary_widget)
         side_column.addWidget(mood_trend_card)
+        side_column.addWidget(recap_entry)
         side_column.addStretch()  # Push widgets up, don't let them expand down
 
         # Layout: Selfie (stretch=2) | InfoBox (stretch=0) | SideColumn (stretch=0)
@@ -1452,6 +1649,29 @@ class DashboardSurface(QFrame):
         self._carousel = MotionCarousel()
         surface_layout.addWidget(self._carousel, stretch=0)  # Fixed height carousel at bottom
 
+        self._side_fixed_min_height = (
+            streak_summary_widget.minimumHeight()
+            + mood_summary_widget.minimumHeight()
+            + mood_trend_card.minimumHeight() + 3 * 12)
+        self._strip.recompute()
+        QTimer.singleShot(0, self._apply_recap_height_gate)
+
+    def _apply_recap_height_gate(self):
+        try:
+            available = (self._top_section_container.height()
+                         - self._side_fixed_min_height)
+            self._recap_entry.maybe_visible(available)
+        except RuntimeError:
+            pass
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_recap_height_gate()
+
+    def refresh_highlights(self):
+        if self._strip is not None:
+            self._strip.recompute()
+
 
 class DashboardPage(QWidget):
     # Signal emitted when "Take today's selfie" button is clicked
@@ -1461,11 +1681,12 @@ class DashboardPage(QWidget):
     # Signal emitted when photo is deleted
     photoDeleted = Signal()
     # Signal emitted when the On This Day banner is clicked (carries date).
-    # TODO(wave-2 wiring): connect this in gui/dashboard/dashboard.py to open
-    # CalendarPage on the given day (CalendarPage._jump_to_month + detail).
     throwbackOpenRequested = Signal(object)
-    
-    def __init__(self, app_paths=None):
+    # Highlight strip forwards (§8 wiring)
+    chipActivated = Signal(str)
+    recapLaunchRequested = Signal(tuple)
+
+    def __init__(self, app_paths=None, cfg=None, config_path=None):
         super().__init__()
         vars = theme_vars()
 
@@ -1480,6 +1701,8 @@ class DashboardPage(QWidget):
         # construction falls back to the bootstrap+config.toml chain) so the
         # today-card and photos watcher target the real capture root.
         self._app_paths = _resolve_app_paths(app_paths)
+        self._config_path = (Path(config_path) if config_path else
+                             Path(self._app_paths.config_dir) / "config.toml")
         self._surface = None
         self._refreshing = False
         self._build_surface()
@@ -1532,7 +1755,8 @@ class DashboardPage(QWidget):
             self._surface.deleteLater()
         
         # Create new surface
-        self._surface = DashboardSurface(self._app_paths)
+        self._surface = DashboardSurface(self._app_paths,
+                                         config_path=self._config_path)
         # Forward the takeSelfieRequested signal
         self._surface.takeSelfieRequested.connect(self.takeSelfieRequested.emit)
         # Forward the retakeRequested signal
@@ -1541,7 +1765,19 @@ class DashboardPage(QWidget):
         self._surface.photoDeleted.connect(self.photoDeleted.emit)
         # Forward the throwback banner click
         self._surface.throwbackOpenRequested.connect(self.throwbackOpenRequested.emit)
+        # Forward highlight chip / recap entry activation
+        self._surface.chipActivated.connect(self.chipActivated.emit)
+        self._surface.recapLaunchRequested.connect(self.recapLaunchRequested.emit)
         self._root_layout.addWidget(self._surface)
+
+    def refresh_highlights(self):
+        """Recompute the highlight strip + recap entry (recap_seen changed)."""
+        surface = self._surface
+        if surface is not None:
+            try:
+                surface.refresh_highlights()
+            except RuntimeError:
+                pass
     
     def refresh(self):
         """Refresh the dashboard to show updated data (e.g., after a new photo is saved)."""

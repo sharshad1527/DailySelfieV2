@@ -311,6 +311,159 @@ def activity_recaps(dates: Sequence[str], today=None) -> List[Highlight]:
 
 
 # ---------------------------------------------------------------
+# Chip-grade signals (dashboard highlight strip)
+# ---------------------------------------------------------------
+CHIP_MIN_CAPTURE_DAYS = 5
+MILESTONE_RUNGS: Tuple[int, ...] = (7, 30, 100, 365)
+COMEBACK_MIN_GAP_DAYS = 7
+COMEBACK_RECENCY_DAYS = 30
+MOOD_SHIFT_MIN_SAMPLES = 7
+
+
+def recap_period_id(period: Sequence[Any]) -> str:
+    """Stable config id for an eligible period tuple ('month', y, m)/('year', y)."""
+    scope = str(period[0] if period else "").lower()
+    year = int(period[1]) if len(period) > 1 else 0
+    month = int(period[2]) if len(period) > 2 and period[2] is not None else None
+    if scope == "month" and month is not None:
+        return f"month:{year:04d}-{month:02d}"
+    return f"year:{year:04d}"
+
+
+def recap_month_eligible(capture_dates: Sequence[str], year: int, month: int,
+                         today=None) -> bool:
+    """Fully elapsed past month with >= CHIP_MIN_CAPTURE_DAYS capture days."""
+    t = _resolve_today(today)
+    end_d = _parse_day(_month_bounds(year, month)[1])
+    if end_d is None or end_d >= t:
+        return False
+    prefix = f"{int(year):04d}-{int(month):02d}-"
+    days = sum(1 for d in capture_dates
+               if isinstance(d, str) and d.startswith(prefix))
+    return days >= CHIP_MIN_CAPTURE_DAYS
+
+
+def recap_year_eligible(capture_dates: Sequence[str], year: int,
+                        today=None) -> bool:
+    """Fully elapsed past year with >= CHIP_MIN_CAPTURE_DAYS capture days."""
+    t = _resolve_today(today)
+    if int(year) >= t.year:
+        return False
+    prefix = f"{int(year):04d}-"
+    days = sum(1 for d in capture_dates
+               if isinstance(d, str) and d.startswith(prefix))
+    return days >= CHIP_MIN_CAPTURE_DAYS
+
+
+def recap_eligible_periods(api, today=None) -> List[Tuple[str, int, Optional[int]]]:
+    """Eligible recap periods ('month', y, m) / ('year', y), newest first.
+
+    v1 rule: only fully elapsed periods qualify (current month/year never do);
+    a period needs >= CHIP_MIN_CAPTURE_DAYS distinct local capture days.
+    """
+    t = _resolve_today(today)
+    try:
+        dates_all = api.get_all_capture_dates()
+    except Exception:
+        logger.debug("recap_eligible_periods: index unavailable", exc_info=True)
+        return []
+
+    out: List[Tuple[str, int, Optional[int]]] = []
+    months = sorted({(int(d[:4]), int(d[5:7])) for d in dates_all
+                     if isinstance(d, str) and _parse_day(d) is not None},
+                    reverse=True)
+    for y, m in months:
+        if recap_month_eligible(dates_all, y, m, today=t):
+            out.append(("month", y, m))
+    years = sorted({int(d[:4]) for d in dates_all
+                    if isinstance(d, str) and len(d) >= 4 and d[:4].isdigit()},
+                   reverse=True)
+    for y in years:
+        if recap_year_eligible(dates_all, y, today=t):
+            out.append(("year", y, None))
+    out.sort(key=lambda p: (p[1], p[2] if p[2] is not None else 13), reverse=True)
+    return out
+
+
+def streak_record_active(dates: Sequence[str], today=None,
+                         min_streak: int = 2) -> bool:
+    """True when today's capture extends a streak that IS the all-time best.
+
+    Mirrors streak_milestones' record semantics; min_streak filters day-one
+    noise so a single capture doesn't celebrate a 'record'.
+    """
+    t = _resolve_today(today)
+    current, best, has_today = calculate_streaks(
+        list(dates or []), today=datetime(t.year, t.month, t.day))
+    return bool(has_today and current >= max(best, int(min_streak)))
+
+
+def comeback_signal(dates: Sequence[str], today=None,
+                    min_gap_days: int = COMEBACK_MIN_GAP_DAYS,
+                    recency_days: int = COMEBACK_RECENCY_DAYS) -> Optional[Highlight]:
+    """Latest capture day that ended a break of >= min_gap_days, recent enough
+    to still be news (within recency_days of today)."""
+    t = _resolve_today(today)
+    days = sorted(d for d in (_parse_day(x) for x in (dates or [])) if d is not None)
+    latest: Optional[Tuple[date_cls, int]] = None
+    for a, b in zip(days, days[1:]):
+        gap = (b - a).days - 1
+        if gap >= max(1, int(min_gap_days)):
+            latest = (b, gap)
+    if latest is None:
+        return None
+    ended, gap = latest
+    if (t - ended).days > max(0, int(recency_days)):
+        return None
+    return Highlight(
+        kind="comeback",
+        title="Welcome back",
+        subtitle=f"You returned after a {gap}-day break",
+        value=ended.isoformat(),
+        date_range=ended.isoformat(),
+        score=float(gap),
+    )
+
+
+def mood_shift(moods: Sequence[Dict[str, Any]], window_days: int = 30,
+               min_samples: int = MOOD_SHIFT_MIN_SAMPLES,
+               today=None) -> Optional[Highlight]:
+    """Dominant mood changed vs the equal prior window; BOTH windows need
+    >= min_samples entries (chip-grade confidence, stricter than mood_trends)."""
+    t = _resolve_today(today)
+    recent_start = t - timedelta(days=int(window_days) - 1)
+    prior_start = recent_start - timedelta(days=int(window_days))
+    rs, ps = recent_start.isoformat(), prior_start.isoformat()
+
+    recent: List[str] = []
+    prior: List[str] = []
+    for e in moods or []:
+        d, mood = e.get("date"), e.get("mood")
+        if not d or mood is None:
+            continue
+        if rs <= d <= t.isoformat():
+            recent.append(str(mood))
+        elif ps <= d < rs:
+            prior.append(str(mood))
+    if len(recent) < int(min_samples) or len(prior) < int(min_samples):
+        return None
+
+    dom_recent = _dominant_mood([{"mood": m} for m in recent])
+    dom_prior = _dominant_mood([{"mood": m} for m in prior])
+    if dom_recent is None or dom_prior is None or dom_recent == dom_prior:
+        return None
+    direction = "up" if MOOD_ORDER.index(dom_recent) > MOOD_ORDER.index(dom_prior) else "down"
+    return Highlight(
+        kind="mood_shift",
+        title=f"Mood shift: {dom_recent}",
+        subtitle=f"Dominant mood moved {direction} from {dom_prior} to {dom_recent}",
+        value=str(dom_recent),
+        date_range=f"{ps}..{t.isoformat()}",
+        score=float(min(len(recent), len(prior))),
+    )
+
+
+# ---------------------------------------------------------------
 # Aggregators
 # ---------------------------------------------------------------
 def _period(scope: str, target: Any, today_d: date_cls) -> Tuple[Optional[int], Optional[int]]:

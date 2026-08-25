@@ -804,10 +804,18 @@ class SelfiePage(QWidget):
 
         # Advisory quality gate: score the encoded frame before committing.
         # Analysis errors skip the gate (log info, never block the save).
+        # The assessment doubles as the persisted quality metrics — reuse the
+        # same result; never score the frame twice.
+        quality_metrics = None  # gate disabled / analysis failed -> persist NULLs
         if self.config.get("behavior", {}).get("quality_gate_enabled", True):
             warnings = []
             try:
-                warnings = assess_image_quality(bytes(jpg_data))["warnings"]
+                assessment = assess_image_quality(bytes(jpg_data))
+                warnings = assessment["warnings"]
+                quality_metrics = {
+                    "blur_score": assessment["blur_score"],
+                    "brightness": assessment["brightness"],
+                }
             except Exception as e:
                 get_logger("gui.selfie").info("Quality gate skipped: %s", e)
             else:
@@ -835,7 +843,8 @@ class SelfiePage(QWidget):
             height=self._current_qimage.height(),
             mood=selected_mood,
             notes=selected_note,
-            allow_retake=effective_allow_retake
+            allow_retake=effective_allow_retake,
+            quality_metrics=quality_metrics,
         )
 
         if result["success"]:

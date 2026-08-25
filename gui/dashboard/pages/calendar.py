@@ -53,6 +53,7 @@ from PySide6.QtWidgets import (
 
 from core.index_api import IndexAPI, get_api
 from core.paths import AppPaths, get_app_paths
+from core.recap import recap_month_eligible
 from core.storage import delete_path
 from core.thumbs import load_display_pixmap
 from gui.theme import motion_tokens as mt
@@ -189,6 +190,32 @@ class NavIconButton(QPushButton):
                 background-color: transparent;
                 border: none;
                 border-radius: 18px;
+            }}
+            QPushButton:hover {{
+                background-color: {v['surface_container_high']};
+            }}
+            QPushButton:pressed {{
+                background-color: {v['surface_container_highest']};
+            }}
+        """)
+
+
+class RecapIconButton(NavIconButton):
+    """32x32 r16 sparkles button (NavIconButton clone, smaller metrics)."""
+
+    def __init__(self, tooltip: str = "", parent=None):
+        super().__init__("sparkles.svg", tooltip, parent)
+        self.setFixedSize(32, 32)
+
+    def apply_theme(self):
+        v = theme_vars()
+        color = v.qcolor("on_surface_variant" if self.isEnabled() else "outline_variant")
+        self.setIcon(_create_colored_icon(self._icon_name, color))
+        self.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                border: none;
+                border-radius: 16px;
             }}
             QPushButton:hover {{
                 background-color: {v['surface_container_high']};
@@ -866,11 +893,12 @@ class WeekdayRow(QWidget):
 
 
 class MonthHeaderBar(QWidget):
-    """prev / title / next ... [Today]."""
+    """prev / title / next ... [Today] [Recap]."""
 
     prevClicked = Signal()
     nextClicked = Signal()
     todayClicked = Signal()
+    recapClicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -894,6 +922,11 @@ class MonthHeaderBar(QWidget):
         self.today_btn.setFixedHeight(32)
         self.today_btn.clicked.connect(self.todayClicked.emit)
         row.addWidget(self.today_btn)
+
+        self.recap_btn = RecapIconButton("View this month's recap")
+        self.recap_btn.hide()
+        self.recap_btn.clicked.connect(self.recapClicked.emit)
+        row.addWidget(self.recap_btn)
         self.apply_theme()
 
     def set_title(self, text: str):
@@ -910,6 +943,7 @@ class MonthHeaderBar(QWidget):
         self.today_btn.setStyleSheet(today_style)
         self._prev_btn.apply_theme()
         self._next_btn.apply_theme()
+        self.recap_btn.apply_theme()
 
 
 class CalendarSurface(QFrame):
@@ -1503,6 +1537,7 @@ class CalendarPage(QWidget):
     takeSelfieRequested = Signal()
     photoDeleted = Signal()
     dataChanged = Signal()
+    recapRequested = Signal(int, int)
 
     def __init__(self, theme_controller=None, cfg=None, config_path=None,
                  app_paths: Optional[AppPaths] = None):
@@ -1551,6 +1586,7 @@ class CalendarPage(QWidget):
         self.header_bar.prevClicked.connect(lambda: self._change_month(-1))
         self.header_bar.nextClicked.connect(lambda: self._change_month(1))
         self.header_bar.todayClicked.connect(self._goto_today)
+        self.header_bar.recapClicked.connect(self._emit_recap_requested)
         col.addWidget(self.header_bar)
 
         self.weekday_row = WeekdayRow()
@@ -1719,6 +1755,9 @@ class CalendarPage(QWidget):
         self.hint.setVisible(len(rows) == 0)
 
         self._refresh_year_context(year)
+        self.header_bar.recap_btn.setVisible(
+            recap_month_eligible(self._all_dates,
+                                 self._current_year, self._current_month))
         self._bind_tiles(gen)
         self._sync_pulse()
 
@@ -1906,6 +1945,9 @@ class CalendarPage(QWidget):
     def _goto_today(self):
         t = date_cls.today()
         self._load_month(t.year, t.month)
+
+    def _emit_recap_requested(self):
+        self.recapRequested.emit(self._current_year, self._current_month)
 
     def _jump_to_month(self, year: int, month: int):
         self._load_month(int(year), int(month))
