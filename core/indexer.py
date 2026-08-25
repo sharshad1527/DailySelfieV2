@@ -14,6 +14,7 @@ Design notes:
 - Exposes a small API suitable for GUI/back-end usage.
 """
 from __future__ import annotations
+import re
 import sqlite3
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -26,7 +27,16 @@ from core.logging import get_logger
 logger = get_logger("indexer")
 
 # Bump when the schema changes; stamped into the DB via PRAGMA user_version.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+# Forward-only migrations. Key = version being upgraded FROM; each step's SQL
+# brings that DB to key+1, then stamps user_version accordingly.
+_MIGRATIONS: Dict[int, List[str]] = {
+    1: [
+        "ALTER TABLE captures ADD COLUMN blur_score REAL",
+        "ALTER TABLE captures ADD COLUMN brightness REAL",
+    ],
+}
 
 # Minimal schema: captures table. id is filename stem (e.g. 2025-12-12_074512)
 _SCHEMA = """
@@ -40,10 +50,28 @@ CREATE TABLE IF NOT EXISTS captures (
     mood TEXT,
     notes TEXT,
     action TEXT NOT NULL,
-    created_at REAL NOT NULL
+    created_at REAL NOT NULL,
+    blur_score REAL,
+    brightness REAL
 );
 CREATE INDEX IF NOT EXISTS idx_ts ON captures(ts);
 """
+
+
+def _opt_float(value: Any) -> Optional[float]:
+    """Coerce optional quality metric to float or None (NULL-safe)."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _added_column_name(stmt: str) -> Optional[str]:
+    """Extract the column name from an 'ALTER TABLE ... ADD COLUMN <name>' stmt."""
+    m = re.search(r"ADD\s+COLUMN\s+([A-Za-z_]\w*)", stmt, re.IGNORECASE)
+    return m.group(1) if m else None
 
 class Indexer:
     """
@@ -73,12 +101,48 @@ class Indexer:
             pass
 
     def init_db(self) -> None:
-        """Create tables and indexes if missing."""
+        """Create tables and indexes if missing; apply forward-only migrations."""
         self._conn.executescript(_SCHEMA)
+        self._apply_migrations()
         # Stamp schema version (only ever move forward)
         if self.get_user_version() < SCHEMA_VERSION:
             self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self._conn.commit()
+
+    def _apply_migrations(self) -> None:
+        """Apply _MIGRATIONS steps forward-only, stamping user_version per step.
+
+        Steps whose columns already exist (e.g. fresh DBs created on the
+        extended _SCHEMA) are skipped; unknown/future versions are never
+        touched.
+        """
+        current = self.get_user_version()
+        for version in sorted(_MIGRATIONS):
+            if version < current or version + 1 > SCHEMA_VERSION:
+                continue
+            cols = self._table_columns()
+            for stmt in _MIGRATIONS[version]:
+                col = _added_column_name(stmt)
+                if col and col in cols:
+                    continue
+                try:
+                    self._conn.execute(stmt)
+                except sqlite3.OperationalError as e:
+                    if "duplicate column" in str(e).lower():
+                        continue
+                    raise
+                if col:
+                    cols.add(col)
+            self._conn.execute(f"PRAGMA user_version = {version + 1}")
+            self._conn.commit()
+            logger.info(
+                "schema_migrated",
+                extra={"meta": {"from_version": version, "to_version": version + 1}},
+            )
+
+    def _table_columns(self) -> set:
+        cur = self._conn.execute("PRAGMA table_info(captures)")
+        return {row[1] for row in cur.fetchall()}
 
     def get_user_version(self) -> int:
         """Return the schema version stamped in the DB (PRAGMA user_version)."""
@@ -99,6 +163,8 @@ class Indexer:
           - mood (optional str)
           - notes (optional str)
           - action (capture|delete) default 'capture'
+          - blur_score (optional float)
+          - brightness (optional float)
         """
         now = time.time()
         eid = entry.get("id")
@@ -114,14 +180,18 @@ class Indexer:
         mood = entry.get("mood")
         notes = entry.get("notes")
         action = entry.get("action", "capture")
+        blur_score = _opt_float(entry.get("blur_score"))
+        brightness = _opt_float(entry.get("brightness"))
 
         self._conn.execute(
             """
             INSERT OR REPLACE INTO captures
-            (id, ts, path, width, height, resolution, mood, notes, action, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (id, ts, path, width, height, resolution, mood, notes, action,
+             created_at, blur_score, brightness)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (eid, ts, path, width, height, resolution, mood, notes, action, now),
+            (eid, ts, path, width, height, resolution, mood, notes, action, now,
+             blur_score, brightness),
         )
         self._conn.commit()
 
@@ -201,16 +271,20 @@ class Indexer:
                         mood = obj.get("mood")
                         notes = obj.get("notes")
                         action = obj.get("action", obj.get("type", "capture"))
+                        blur_score = _opt_float(obj.get("blur_score"))
+                        brightness = _opt_float(obj.get("brightness"))
 
                         try:
                             # Inline insert to avoid commit() in add_capture per row
                             self._conn.execute(
                                 """
                                 INSERT OR REPLACE INTO captures
-                                (id, ts, path, width, height, resolution, mood, notes, action, created_at)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                (id, ts, path, width, height, resolution, mood,
+                                 notes, action, created_at, blur_score, brightness)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 """,
-                                (eid, ts, path, width, height, resolution, mood, notes, action, now),
+                                (eid, ts, path, width, height, resolution, mood,
+                                 notes, action, now, blur_score, brightness),
                             )
                             count += 1
                         except Exception:
@@ -302,6 +376,27 @@ class Indexer:
                 out.append({"date": d, "mood": row["mood"]})
         return out
     
+    def get_rows_missing_quality(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Capture rows (action='capture') whose blur_score is still NULL."""
+        cur = self._conn.execute(
+            """
+            SELECT id, path FROM captures
+            WHERE action='capture' AND blur_score IS NULL
+            ORDER BY ts ASC
+            LIMIT ?
+            """,
+            (int(limit),),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def update_quality(self, eid: str, blur_score: Optional[float], brightness: Optional[float]) -> None:
+        """Persist assessed quality metrics for one capture row."""
+        self._conn.execute(
+            "UPDATE captures SET blur_score = ?, brightness = ? WHERE id = ?",
+            (_opt_float(blur_score), _opt_float(brightness), eid),
+        )
+        self._conn.commit()
+
     def count_rows(self) -> int:
         cur = self._conn.execute("SELECT COUNT(*) as c FROM captures")
         row = cur.fetchone()

@@ -1,10 +1,13 @@
 """
 Capture flow without camera: already-captured detection across the local-day
 midnight boundary (UTC-named files), retake swap semantics, block when
-allow_retake=False, and old-photo preservation when deletion fails.
+allow_retake=False, old-photo preservation when deletion fails, and quality
+metric persistence into the DB + JSONL audit.
 """
+import json
 import types
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -118,3 +121,39 @@ def test_delete_failure_keeps_old_file_and_still_succeeds(app_paths, set_tz, mon
     assert old_path.exists()
     assert old_path.read_bytes() == FAKE_JPEG
     assert _jpg_count(photos_root) == 2
+
+
+def test_quality_metrics_persist_to_db_and_jsonl_audit(app_paths):
+    result = commit_capture_from_bytes(
+        app_paths, b"quality-bytes", 64, 64,
+        quality_metrics={"blur_score": 812.5, "brightness": 142.0},
+    )
+
+    assert result["success"] is True
+    from core.index_api import get_api
+    api = get_api(app_paths)
+    row = api.get_item(result["id"])
+    assert row["blur_score"] == pytest.approx(812.5)
+    assert row["brightness"] == pytest.approx(142.0)
+
+    lines = [json.loads(l) for l in
+             (Path(app_paths.data_dir) / "captures.jsonl").read_text(encoding="utf-8").splitlines()]
+    audit_line = next(l for l in lines if l.get("id") == result["id"])
+    assert audit_line["blur_score"] == pytest.approx(812.5)
+    assert audit_line["brightness"] == pytest.approx(142.0)
+
+
+def test_commit_without_metrics_leaves_quality_null_and_absent_in_jsonl(app_paths):
+    result = commit_capture_from_bytes(app_paths, b"plain-bytes", 32, 32)
+
+    assert result["success"] is True
+    from core.index_api import get_api
+    api = get_api(app_paths)
+    row = api.get_item(result["id"])
+    assert row["blur_score"] is None and row["brightness"] is None
+
+    lines = [json.loads(l) for l in
+             (Path(app_paths.data_dir) / "captures.jsonl").read_text(encoding="utf-8").splitlines()]
+    audit_line = next(l for l in lines if l.get("id") == result["id"])
+    assert "blur_score" not in audit_line
+    assert "brightness" not in audit_line

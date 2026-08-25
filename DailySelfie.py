@@ -164,6 +164,7 @@ def main(argv=None):
     
     grp_run.add_argument("--show-paths", action="store_true", help="Display all resolved file paths")
     grp_run.add_argument("--list-cameras", action="store_true", help="Scan and list available video devices")
+    grp_run.add_argument("--backfill-quality", action="store_true", help="Score older photos for blur/brightness (headless)")
     grp_run.add_argument("--tail-logs", type=int, nargs="?", const=20, metavar="N", help="Show last N log entries (default: 20)")
 
     # Group: Theme
@@ -263,6 +264,16 @@ def main(argv=None):
     except Exception:
         logger.exception("index_api_init_failed")
         # We continue; some features might work without DB
+
+    # -------------------------------------------------
+    # Phase 6.5: Headless Maintenance
+    # -------------------------------------------------
+    if args.backfill_quality:
+        from core.recap import backfill_quality
+        stats = backfill_quality(get_index_api(paths), logger=logger)
+        logger.info("backfill_quality_complete", extra={"meta": stats})
+        print(f"Quality backfill complete: {stats}")
+        return 0
 
     # -------------------------------------------------
     # Phase 7: Command Execution

@@ -24,7 +24,7 @@ from typing import Dict, Any, List, Optional
 import json
 import time
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from core.indexer import Indexer, SCHEMA_VERSION
 from core.metadata import read_meta, write_meta, delete_meta, merge_db_and_meta
@@ -38,6 +38,50 @@ DB_FILENAME = "index.db"
 AUDIT_FILENAME = "captures.jsonl"
 
 logger = get_logger("index_api")
+
+
+def _local_hour(ts) -> Optional[int]:
+    """LOCAL hour (0-23) of a stored UTC ts; None for malformed input."""
+    if not isinstance(ts, str):
+        return None
+    s = ts.strip()
+    if not s:
+        return None
+    if s.endswith(("Z", "z")):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone().hour
+
+
+class HighlightsCache:
+    """
+    Tiny memo for computed highlight sets.
+
+    Entries are keyed (scope, target) -> (generation, results); a hit is
+    served only while its generation matches the API's current change
+    counter (bumped by _notify_changed on every write), so any capture,
+    deletion or meta edit naturally invalidates everything.
+    """
+
+    def __init__(self) -> None:
+        self._entries: Dict[Any, Any] = {}
+
+    def get(self, scope: str, target: Any, generation: int):
+        hit = self._entries.get((scope, target))
+        if hit is not None and hit[0] == generation:
+            return hit[1]
+        return None
+
+    def put(self, scope: str, target: Any, generation: int, results: Any) -> None:
+        self._entries[(scope, target)] = (generation, results)
+
+    def clear(self) -> None:
+        self._entries.clear()
 
 
 class IndexAPI:
@@ -62,6 +106,13 @@ class IndexAPI:
         self.audit_path: Path = self.data_dir / AUDIT_FILENAME
         self._indexer: Optional[Indexer] = None
         self._change_listeners: List[callable] = []
+        self._generation: int = 0
+        self.highlights_cache = HighlightsCache()
+
+    @property
+    def generation(self) -> int:
+        """Monotonic change counter; bumped on every successful write."""
+        return self._generation
 
     def add_index_listener(self, callback) -> None:
         """Register a zero-arg callback fired after successful record_capture /
@@ -70,6 +121,7 @@ class IndexAPI:
             self._change_listeners.append(callback)
 
     def _notify_changed(self) -> None:
+        self._generation += 1
         for cb in list(self._change_listeners):
             try:
                 cb()
@@ -405,6 +457,68 @@ class IndexAPI:
             if d and start <= d <= end:
                 out.append({"date": d, "mood": row["mood"]})
         return out
+
+    def get_rows_with_quality(self, year: Optional[int] = None,
+                              month: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Capture rows (action='capture') with their quality columns for the
+        given LOCAL period; year=None means all history.
+
+        Rows are filtered Python-side via timeutils.local_date_str so a
+        boundary capture lands on the user's local month/year (SQL substr
+        would bucket UTC). Ordered ts ascending.
+        """
+        from core.timeutils import local_date_str
+
+        idx = self._ensure_indexer()
+        year_prefix = f"{year:04d}-" if year else None
+        month_prefix = f"{year:04d}-{month:02d}-" if year and month else None
+        cur = idx._conn.execute(
+            "SELECT * FROM captures WHERE action='capture' ORDER BY ts ASC"
+        )
+        out: List[Dict[str, Any]] = []
+        for row in cur.fetchall():
+            d = local_date_str(row["ts"])
+            if not d:
+                continue
+            if month_prefix and not d.startswith(month_prefix):
+                continue
+            if year_prefix and not d.startswith(year_prefix):
+                continue
+            out.append(dict(row))
+        return out
+
+    def get_capture_times_between(self, start: str, end: str) -> List[int]:
+        """
+        LOCAL hours (0-23) of captures whose LOCAL day bucket falls in
+        [start, end] inclusive ('YYYY-MM-DD' strings).
+
+        The window is converted to UTC ISO bounds covering local midnight to
+        midnight so the SQL range matches timeutils bucketing; malformed ts
+        rows are skipped. Returned order follows ts ascending.
+        """
+        idx = self._ensure_indexer()
+        try:
+            win_start = datetime.strptime(start, "%Y-%m-%d").astimezone()
+            win_end = datetime.strptime(end, "%Y-%m-%d").astimezone() + timedelta(days=1)
+        except ValueError:
+            return []
+        start_utc = win_start.astimezone(timezone.utc).isoformat()
+        end_utc = win_end.astimezone(timezone.utc).isoformat()
+        cur = idx._conn.execute(
+            """
+            SELECT ts FROM captures
+            WHERE action='capture' AND ts >= ? AND ts < ?
+            ORDER BY ts ASC
+            """,
+            (start_utc, end_utc),
+        )
+        hours: List[int] = []
+        for row in cur.fetchall():
+            h = _local_hour(row["ts"])
+            if h is not None:
+                hours.append(h)
+        return hours
 
     def get_last_photo(self) -> Optional[Dict[str, Any]]:
         """

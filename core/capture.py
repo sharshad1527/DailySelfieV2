@@ -77,7 +77,8 @@ def commit_capture_from_bytes(
     mood: Optional[str] = None,
     notes: Optional[str] = None,
     allow_retake: bool = False,
-    logger=None
+    logger=None,
+    quality_metrics: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Saves provided JPEG bytes to disk and records the entry.
@@ -85,6 +86,10 @@ def commit_capture_from_bytes(
     Retake-safe (swap-after-save): the new file is written and recorded
     BEFORE the previous photo is removed, so a crash/failure mid-retake
     always leaves at least one valid photo for today.
+
+    quality_metrics: optional {"blur_score": float, "brightness": float}
+    from core.quality.assess_image_quality; floats are persisted into the
+    DB row and the JSONL audit line when present.
     """
     ts = datetime.now(timezone.utc)
     
@@ -138,6 +143,11 @@ def commit_capture_from_bytes(
         "notes": notes,
         "action": "capture",
     }
+    if quality_metrics:
+        for key in ("blur_score", "brightness"):
+            val = quality_metrics.get(key)
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                index_entry[key] = float(val)
 
     api = None
     try:
