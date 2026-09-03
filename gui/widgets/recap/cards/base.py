@@ -118,6 +118,26 @@ class PaintedScalar(QWidget):
             self.update()
 
     # ---- painting ----------------------------------------------------------
+    def glyph_rect(self) -> QRectF:
+        """Local bounding rect of the painted text (left-aligned, v-centered).
+
+        Derived from the paint font at the CURRENT value, so callers (e.g. the
+        streak ring) can frame exactly the glyphs instead of the whole widget.
+        """
+        f = QFont(self.font())
+        f.setPixelSize(self._font_px)
+        f.setWeight(QFont.DemiBold)
+        fm = QFontMetrics(f)
+        text = fm.elidedText(
+            self._fmt.format(self._value) + self._suffix,
+            Qt.ElideRight, max(self.width(), 1),
+        )
+        r = QRectF(0.0, 0.0, min(fm.horizontalAdvance(text),
+                                 max(self.width(), 0.0)),
+                   fm.height())
+        r.moveCenter(QRectF(0, 0, self.width(), self.height()).center())
+        return r
+
     def _get_value(self) -> float:
         return self._value
 

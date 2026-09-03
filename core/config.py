@@ -26,8 +26,11 @@ from typing import Any, Dict, List
 
 try:
     import tomllib  # Python 3.11+
-except ModuleNotFoundError:
-    import tomli as tomllib  # fallback
+except ModuleNotFoundError:  # Python < 3.11: fall back to tomli if present
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError:
+        tomllib = None  # load_config() raises a clear error when needed
 
 try:
     import tomli_w
@@ -261,6 +264,12 @@ def load_config(config_path: Path) -> Dict[str, Any]:
         _normalize_paths(cfg)
         _validate_behavior(cfg)
         return cfg
+
+    if tomllib is None:
+        raise RuntimeError(
+            "Cannot read config.toml: Python 3.11+ is required "
+            "(or run: pip install tomli)"
+        )
 
     with config_path.open("rb") as f:
         user_cfg = tomllib.load(f)

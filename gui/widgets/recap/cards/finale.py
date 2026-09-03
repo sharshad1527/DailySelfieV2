@@ -96,11 +96,14 @@ class FinaleCard(RecapCardBase):
 
     def _cells(self):
         streaks = _d(self._data, "streaks", {})
-        consistency = _float(_d(self._data, "consistency_pct"), 0.0)
+        consistency = max(0.0, _float(_d(self._data, "consistency_pct"), 0.0))
+        # Drop the decimal once the DISPLAYED value hits 100 ("100%", not a
+        # "100.0%" that elides at narrow card widths).
+        cons_fmt = "{:.0f}%" if round(consistency, 1) >= 100 else "{:.1f}%"
         return [
             ("captures", max(0, _int(_d(self._data, "captures_total"))), "{:.0f}"),
             ("active days", max(0, _int(_d(self._data, "active_days"))), "{:.0f}"),
-            ("consistent", max(0.0, consistency), "{:.1f}%"),
+            ("consistent", consistency, cons_fmt),
             ("best streak", max(0, _int(_d(streaks, "best"))), "{:.0f}"),
         ]
 

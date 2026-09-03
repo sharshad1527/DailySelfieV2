@@ -86,6 +86,26 @@ class ClockVizCard(RecapCardBase):
             counts[name] = total
         return counts
 
+    def _dial_geometry(self) -> tuple:
+        """(dial QRectF, arc_r) — pure so probes assert the painted geometry."""
+        side = min(self.width() * 0.52, self.height() - 96.0)
+        side = max(side, 120.0)
+        cx = self.width() * 0.30
+        cy = self.height() * 0.56
+        dial = QRectF(cx - side / 2, cy - side / 2, side, side)
+        arc_r = self._arc_radius(side / 2, cx)
+        return dial, arc_r
+
+    def _arc_radius(self, dial_r: float, cx: float) -> float:
+        """Peak-arc radius clamped to leave a gutter before the band labels.
+
+        The unclamped dial_r + 5 overshoots into the label column at narrow
+        widths; clamp (floored at the rim so the arc never sinks inside the
+        dial face).
+        """
+        limit = self.width() * 0.58 - 6.0 - cx
+        return max(dial_r, min(dial_r + 5.0, limit))
+
     def paintEvent(self, event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
@@ -94,11 +114,10 @@ class ClockVizCard(RecapCardBase):
         p.setBrush(QColor(v["surface_container_high"]))
         p.drawRoundedRect(self.rect(), 22, 22)
 
-        side = min(self.width() * 0.52, self.height() - 96.0)
-        side = max(side, 120.0)
-        cx = self.width() * 0.30
-        cy = self.height() * 0.56
-        dial = QRectF(cx - side / 2, cy - side / 2, side, side)
+        dial, arc_r = self._dial_geometry()
+        side = dial.width()
+        cx = dial.center().x()
+        cy = dial.center().y()
 
         pen = QPen(theme_vars().rgba("outline_variant", 0.9))
         pen.setWidthF(1.5)
@@ -126,7 +145,6 @@ class ClockVizCard(RecapCardBase):
             p.setPen(pen)
             span_deg = 30.0
             start = peak * 15.0 - 90.0 - span_deg / 2
-            arc_r = side / 2 + 5
             arc_rect = QRectF(dial.center().x() - arc_r, dial.center().y() - arc_r,
                               arc_r * 2, arc_r * 2)
             p.drawArc(arc_rect, int(start * 16), int(span_deg * 16))

@@ -9,7 +9,14 @@ class Spinner:
         self.message = message
         self._stop = threading.Event()
         self._thread = None
-        self._frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        # Braille frames need a UTF-8-capable stdout (Windows consoles report
+        # utf-8 via WinIO, but redirected/piped output uses cp1252 etc. and
+        # would raise UnicodeEncodeError mid-install).
+        enc = (getattr(sys.stdout, "encoding", None) or "ascii").replace("-", "").lower()
+        if "utf" in enc:
+            self._frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        else:
+            self._frames = "|/-\\"
 
     def _run(self):
         for frame in itertools.cycle(self._frames):

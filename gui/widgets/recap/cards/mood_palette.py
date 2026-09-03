@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QPainter, QPen, QMovie
+from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen, QMovie
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QVBoxLayout, QWidget,
 )
@@ -23,6 +23,12 @@ from .base import RecapCardBase, _d, _int
 MOOD_DIR = Path(__file__).resolve().parents[3] / "assets" / "icons" / "mood"
 MOOD_ORDER = ("Great", "Good", "Neutral", "Bad", "Awful")
 
+BAR_H = 18.0
+BAR_RADIUS = 9.0
+LABEL_GAP = 6.0
+LABEL_H = 16.0
+SINGLE_FILL_ALPHA = 0.8
+
 
 def _gif_name(mood: str):
     """Mood->GIF filename from the dashboard map (guarded: optional dep)."""
@@ -31,6 +37,119 @@ def _gif_name(mood: str):
         return MOOD_GIF_MAP.get(mood)
     except Exception:
         return None
+
+
+class _MoodBar(QWidget):
+    """Stacked mood bar + metric-aware labels, as a real layout child so the
+    band it paints is reserved (legend rows can never land on the bar)."""
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._entries: List[tuple] = []
+        self.setFixedHeight(int(BAR_H + LABEL_GAP + LABEL_H))
+
+    def set_entries(self, entries: List[tuple]) -> None:
+        self._entries = [(m, int(c)) for m, c in entries if int(c) > 0]
+        self.update()
+
+    # ---- geometry (pure; shared by painting and probes) ---------------------
+    def segment_rects(self) -> List[tuple]:
+        """[(mood, QRectF)] in local coords for the currently set entries."""
+        total = sum(c for _m, c in self._entries)
+        w = self.width()
+        if not self._entries or total <= 0 or w <= 0:
+            return []
+        rects: List[tuple] = []
+        x = 0.0
+        remaining_w = float(w)
+        last = len(self._entries) - 1
+        for i, (mood, count) in enumerate(self._entries):
+            seg_w = remaining_w if i == last else w * (count / total)
+            rects.append((mood, QRectF(x, 0.0, seg_w, BAR_H)))
+            x += seg_w
+            remaining_w -= seg_w
+        return rects
+
+    def label_texts(self) -> List[str]:
+        if len(self._entries) == 1:
+            mood, _count = self._entries[0]
+            return [f"100% {mood}"]
+        return [mood for mood, _c in self._entries]
+
+    def label_placements(self) -> List[tuple]:
+        """Metrics-aware label layout: [(text, QRectF)] in local coords.
+
+        Labels flow left-to-right sized by their real text advance; anything
+        that would overflow the right edge is elided into the remaining
+        space or dropped entirely (never clipped mid-glyph, never drawn past
+        the bar edge).
+        """
+        rects = self.segment_rects()
+        if not rects:
+            return []
+        f = QFont(self.font())
+        f.setPixelSize(11)
+        fm = QFontMetrics(f)
+        right = self.width()
+        y = BAR_H + LABEL_GAP
+        out: List[tuple] = []
+        x = 0.0
+        ell_w = fm.horizontalAdvance("…")
+        for (mood, _seg) in rects:
+            text = f"100% {mood}" if len(rects) == 1 else mood
+            adv = fm.horizontalAdvance(text)
+            if x + adv <= right:
+                out.append((text, QRectF(x, y, adv + 2, LABEL_H)))
+                x += adv + 14.0
+                continue
+            if len(rects) > 1 and right - x > ell_w:
+                elided = fm.elidedText(mood, Qt.ElideRight, right - x)
+                out.append((elided, QRectF(x, y, right - x, LABEL_H)))
+            break
+        return out
+
+    # ---- painting ------------------------------------------------------------
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        v = theme_vars()
+        track = QRectF(0.0, 0.0, self.width(), BAR_H)
+
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(v["surface_container_highest"]))
+        p.drawRoundedRect(track, BAR_RADIUS, BAR_RADIUS)
+
+        rects = self.segment_rects()
+        single = len(rects) == 1
+        if rects:
+            clip = QPainterPath()
+            clip.addRoundedRect(track, BAR_RADIUS, BAR_RADIUS)
+            p.save()
+            p.setClipPath(clip)
+            for mood, seg in rects:
+                color = QColor(MOOD_COLORS[mood])
+                p.setBrush(color)
+                if single:
+                    color.setAlphaF(SINGLE_FILL_ALPHA)
+                    p.drawRoundedRect(seg, BAR_RADIUS, BAR_RADIUS)
+                else:
+                    p.drawRect(seg)
+            p.restore()
+
+            pen = QPen(theme_vars().rgba("outline_variant", 0.95))
+            pen.setWidthF(1.0)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(track.adjusted(0.5, 0.5, -0.5, -0.5),
+                              BAR_RADIUS, BAR_RADIUS)
+
+            f = QFont(self.font())
+            f.setPixelSize(11)
+            p.setFont(f)
+            p.setPen(QColor(v["on_surface_variant"]))
+            for text, lrect in self.label_placements():
+                p.drawText(lrect, Qt.AlignLeft | Qt.AlignVCenter, text)
+        p.end()
 
 
 class MoodPaletteCard(RecapCardBase):
@@ -103,6 +222,11 @@ class MoodPaletteCard(RecapCardBase):
             row_lay.addWidget(pct)
             legend_lay.addWidget(row)
             self._legend_rows.append(row)
+
+        self._bar = _MoodBar()
+        self._bar.set_entries(
+            [(m, self._counts()[m]) for m in MOOD_ORDER if m in self._counts()])
+        self.add_section(self._bar)
         self.add_section(legend)
         self._lay.addStretch()
 
@@ -165,40 +289,6 @@ class MoodPaletteCard(RecapCardBase):
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(v["surface_container_high"]))
         p.drawRoundedRect(self.rect(), 22, 22)
-
-        counts = self._counts()
-        total = sum(counts.values())
-        bar = QRectF(28.0, 0.0, max(self.width() - 56.0, 0.0), 18.0)
-        y = self.height() - 58.0
-        bar.moveTop(y)
-        p.drawRoundedRect(bar, 9, 9)
-        if total > 0 and counts:
-            x = bar.left()
-            remaining_w = bar.width()
-            entries = [(m, counts[m]) for m in MOOD_ORDER if m in counts]
-            for i, (mood, count) in enumerate(entries):
-                seg_w = remaining_w * (count / total) if i == len(entries) - 1 \
-                    else bar.width() * (count / total)
-                seg = QRectF(x, y, seg_w, bar.height())
-                p.setPen(Qt.NoPen)
-                p.setBrush(QColor(MOOD_COLORS[mood]))
-                p.drawRect(seg.adjusted(0, 0, 0, 0))
-                x += seg_w
-                remaining_w -= seg_w
-            pen = QPen(theme_vars().rgba("outline_variant", 0.95))
-            pen.setWidthF(1.0)
-            p.setPen(pen)
-            p.setBrush(Qt.NoBrush)
-            p.drawRoundedRect(bar.adjusted(0.5, 0.5, -0.5, -0.5), 9, 9)
-
-            label_x = 28.0
-            p.setFont(self.font())
-            p.setPen(QColor(v["on_surface_variant"]))
-            for mood, _c in entries:
-                p.drawText(QRectF(label_x, y + 24, bar.width() / len(entries), 16),
-                           Qt.AlignLeft | Qt.AlignVCenter, mood)
-                fm_w = p.fontMetrics().horizontalAdvance(mood) + 16
-                label_x += fm_w
         p.end()
 
     # ---- theme -----------------------------------------------------------------

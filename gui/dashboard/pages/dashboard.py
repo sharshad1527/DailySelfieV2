@@ -483,6 +483,21 @@ class OnThisDayBanner(LiftMixin, QFrame):
         super().mouseReleaseEvent(event)
 
 
+def _raise_to_layout_minimum(widget: QFrame) -> None:
+    """RC3: an explicit setMinimumHeight smaller than the widget's real
+    layout minimum lets the parent layout shrink the widget below what its
+    content needs — Qt silently clips. Raise the floor to the honest,
+    layout-derived value (never lowers an already-honest floor)."""
+    lay = widget.layout()
+    if lay is None:
+        return
+    widget.ensurePolished()
+    honest = max(lay.totalMinimumSize().height(),
+                 widget.minimumSizeHint().height(),
+                 widget.minimumHeight())
+    widget.setMinimumHeight(honest)
+
+
 def _remember_behavior_list(config_path, key: str, value: str,
                             cap: int = 64) -> bool:
     """Append `value` to behavior[key] (dedupe, keep newest cap) atomically."""
@@ -515,6 +530,11 @@ class HighlightStrip(QWidget):
     eligibilityChanged = Signal(list, set)
 
     MAX_CHIPS = 3
+    # Slot contract: the strip occupies exactly the OnThisDayBanner's old
+    # 56px row whether it shows chips (vertically centered) or the banner,
+    # so switching modes is net-zero for the rest of the surface. Hidden
+    # (no content) still collapses to zero.
+    SLOT_HEIGHT = 56
 
     def __init__(self, app_paths=None, config_path=None, parent=None):
         super().__init__(parent)
@@ -524,6 +544,7 @@ class HighlightStrip(QWidget):
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(6)
+        self.setFixedHeight(self.SLOT_HEIGHT)
         self.hide()
 
     # ---- data ---------------------------------------------------------
@@ -584,7 +605,7 @@ class HighlightStrip(QWidget):
                 policy = chip.sizePolicy()
                 policy.setHorizontalPolicy(QSizePolicy.Expanding)
                 chip.setSizePolicy(policy)
-                self._layout.addWidget(chip)
+                self._layout.addWidget(chip, 0, Qt.AlignVCenter)
                 built = True
             else:
                 # 2) scored chips (cap 3, drop lowest)
@@ -633,7 +654,7 @@ class HighlightStrip(QWidget):
                         chip.activated.connect(self.chipActivated.emit)
                         chip.dismissed.connect(self._on_dismissed)
                         row.insertWidget(0, chip)
-                    self._layout.addWidget(row_holder)
+                    self._layout.addWidget(row_holder, 0, Qt.AlignVCenter)
                     built = True
 
         # 3) OnThisDay fallback (kept even with highlights disabled)
@@ -641,7 +662,7 @@ class HighlightStrip(QWidget):
             banner = OnThisDayBanner.create(self._app_paths)
             if banner is not None:
                 banner.openRequested.connect(self.throwbackOpenRequested.emit)
-                self._layout.addWidget(banner)
+                self._layout.addWidget(banner, 0, Qt.AlignVCenter)
                 built = True
 
         self.setVisible(built)
@@ -785,6 +806,7 @@ class StreakSummaryWidget(LiftMixin, QFrame):
             record_row.addStretch()
             layout.addLayout(record_row)
 
+        _raise_to_layout_minimum(self)
         self.init_lift()
 
     def _create_colored_icon(self, icon_name: str, qcolor):
@@ -878,6 +900,7 @@ class MoodSummaryWidget(LiftMixin, QFrame):
             section_title = "Last 30 days"
         self._build_mood_section(layout, section_title, moods_30, days_available)
 
+        _raise_to_layout_minimum(self)
         self.init_lift()
 
     def _build_mood_section(self, parent_layout: QVBoxLayout, title: str, mood_counts: dict, total_days: int):
@@ -1043,6 +1066,7 @@ class MoodTrendCard(LiftMixin, QFrame):
         self._chart = MoodTrendChart(self)
         layout.addWidget(self._chart, 1)
 
+        _raise_to_layout_minimum(self)
         self.init_lift()
         self.refresh_data()
 
@@ -1624,11 +1648,19 @@ class DashboardSurface(QFrame):
         streak_summary_widget = StreakSummaryWidget(app_paths=self._app_paths)
         mood_summary_widget = MoodSummaryWidget(app_paths=self._app_paths)
         mood_trend_card = MoodTrendCard(app_paths=self._app_paths)
+        self._streak_card = streak_summary_widget
+        self._mood_card = mood_summary_widget
+        self._trend_card = mood_trend_card
 
         recap_entry = RecapEntryCard()
         recap_entry.recapLaunchRequested.connect(
             self.recapLaunchRequested.emit)
         self._strip.eligibilityChanged.connect(recap_entry.set_eligible)
+        # RC4: the entry's visibility depends on both available height and
+        # eligible scopes — re-run the gate whenever recompute() publishes
+        # new eligibility (set_eligible path), not only on resize.
+        self._strip.eligibilityChanged.connect(
+            lambda *_: QTimer.singleShot(0, self._apply_recap_height_gate))
         self._recap_entry = recap_entry
 
         side_column.addWidget(streak_summary_widget)
@@ -1649,17 +1681,35 @@ class DashboardSurface(QFrame):
         self._carousel = MotionCarousel()
         surface_layout.addWidget(self._carousel, stretch=0)  # Fixed height carousel at bottom
 
-        self._side_fixed_min_height = (
-            streak_summary_widget.minimumHeight()
-            + mood_summary_widget.minimumHeight()
-            + mood_trend_card.minimumHeight() + 3 * 12)
+        # RC2: derive the always-present side-column minimum from the cards'
+        # real layout constraints at runtime (cosmetic setMinimumHeight values
+        # understate it and made the recap gate admit entries that clipped
+        # content). Computed lazily; the per-instance cache is invalidated by
+        # rebuilds since refresh() constructs a fresh DashboardSurface.
+        self._side_min_cache = None
         self._strip.recompute()
         QTimer.singleShot(0, self._apply_recap_height_gate)
+
+    def _side_fixed_min_height(self) -> int:
+        """Sum of real minimum heights of streak/mood/trend + their spacings."""
+        if self._side_min_cache is None:
+            total = 0
+            for w in (self._streak_card, self._mood_card, self._trend_card):
+                lay_min = 0
+                if w.layout() is not None:
+                    lay_min = w.layout().totalMinimumSize().height()
+                total += max(lay_min,
+                             w.minimumSizeHint().height(),
+                             w.minimumHeight())
+            gaps = max(0, len((self._streak_card, self._mood_card,
+                               self._trend_card)) - 1)
+            self._side_min_cache = total + gaps * 12
+        return self._side_min_cache
 
     def _apply_recap_height_gate(self):
         try:
             available = (self._top_section_container.height()
-                         - self._side_fixed_min_height)
+                         - self._side_fixed_min_height())
             self._recap_entry.maybe_visible(available)
         except RuntimeError:
             pass
@@ -1671,6 +1721,9 @@ class DashboardSurface(QFrame):
     def refresh_highlights(self):
         if self._strip is not None:
             self._strip.recompute()
+            # RC4: recompute() may add/remove strip content and republish
+            # eligibility; reassess the recap entry gate afterwards.
+            QTimer.singleShot(0, self._apply_recap_height_gate)
 
 
 class DashboardPage(QWidget):

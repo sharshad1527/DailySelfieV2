@@ -132,13 +132,6 @@ def main(argv=None):
     from core.logging import global_exception_hook
     sys.excepthook = global_exception_hook
 
-    # QApplication must exist before ANY QObject is constructed (e.g.
-    # ThemeController below); constructing QObject-first warns/crashes on
-    # some PySide6 versions. Create-or-reuse here so every downstream mode
-    # (GUI and headless) sees a valid QCoreApplication.instance().
-    from PySide6.QtWidgets import QApplication
-    app = QApplication.instance() or QApplication(sys.argv)
-
     argv = argv if argv is not None else sys.argv[1:]
 
     # 1. Bootstrap: Resolve paths relative to OS (before config is loaded)
@@ -193,6 +186,25 @@ def main(argv=None):
     grp_cfg.add_argument("--quality", type=int, metavar="1-100", help="Override JPEG quality")
 
     args = parser.parse_args(argv)
+
+    # QApplication must exist before ANY QObject is constructed (e.g.
+    # ThemeController below); constructing QObject-first warns/crashes on
+    # some PySide6 versions. Create-or-reuse here so every downstream mode
+    # (GUI and headless) sees a valid QCoreApplication.instance().
+    # Deferred until after argparse: the dependency-free lifecycle commands
+    # (--install/--uninstall/autostart/desktop-entry toggles) must run on a
+    # bare Python BEFORE the venv exists, where PySide6 is not importable.
+    lifecycle_only = any((
+        args.install,
+        args.uninstall,
+        args.enable_autostart,
+        args.disable_autostart,
+        args.create_desktop_entry,
+        args.delete_desktop_entry,
+    ))
+    if not lifecycle_only:
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance() or QApplication(sys.argv)
 
     # -------------------------------------------------
     # Phase 1: Installation Lifecycle
