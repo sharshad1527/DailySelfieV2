@@ -48,7 +48,7 @@ from desktop_entry import is_desktop_entry_enabled
 from core.app_info import APP_VERSION
 from core.autostart_manager import set_autostart
 from core.camera import list_cameras
-from core.config import load_config, write_config
+from core.config import DEFAULT_CONFIG, load_config, write_config
 from core.desktop_entry_manager import set_desktop_entry
 from core.index_api import get_api
 from core.logging import get_logger
@@ -74,7 +74,36 @@ _ROW_KEYS: Dict[str, str] = {
 }
 
 TIMER_MIN, TIMER_MAX = 0, 60
-DIM_MIN, DIM_MAX, DIM_STEP = 0, 4096, 80
+# DIM_MIN is 1, not 0: core.config._validate_behavior accepts only a positive
+# int (or null) for width/height and rewrites 0 -> None, which write_config then
+# strips — so a persisted 0 never survives a round trip and the key silently
+# reverts to the DEFAULT_CONFIG resolution on the next load. Stepper bounds must
+# therefore match the validator's real minimum. See _sanitised_dimension.
+DIM_MIN, DIM_MAX, DIM_STEP = 1, 4096, 80
+_DIM_KEYS = ("width", "height")
+QUALITY_MIN, QUALITY_MAX, QUALITY_FALLBACK = 1, 100, 90
+
+
+def _sanitised_dimension(key: str, raw: Any) -> int:
+    """The width/height value core.config will actually hold after a load.
+
+    `_validate_behavior` rewrites 0/None -> None and `write_config` omits None
+    keys, so "0 = camera default" cannot survive a round trip: the key is
+    dropped and the next load falls back to DEFAULT_CONFIG. Normalising to the
+    value that really persists means the stepper can never display a number the
+    config layer will silently rewrite (settings-page.md edge case 9).
+
+    Tied to DIM_MIN so flipping the bounds back to 0 (once core.config stops
+    rewriting 0) needs no second change here.
+    """
+    fallback = DEFAULT_CONFIG["behavior"].get(key, 1280)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = int(fallback)
+    if value < DIM_MIN:
+        value = int(fallback)
+    return max(DIM_MIN, min(DIM_MAX, value))
 
 # C4 "invalid input shake": ±4px ×3 @40ms Linear (motion-gated).
 _SHAKE_AMPLITUDE_PX = 4
@@ -814,6 +843,7 @@ class SettingsPage(QWidget):
         self._themed: List[QWidget] = []
         self._sections: List[SectionCard] = []
         self._captions: List[QLabel] = []
+        self._row_by_key: Dict[str, QWidget] = {}
         self._cam_worker: Optional[CameraProbeWorker] = None
         self._shell_workers: Dict[str, ManagerCallThread] = {}
         self._probed_once = False
@@ -950,19 +980,25 @@ class SettingsPage(QWidget):
         # --- Quality slider ---
         quality = SliderRow(
             "Image quality", "JPEG compression quality (1–100)", "quality",
-            self._clamped_quality(), 1, 100, suffix="%",
+            self._clamped_quality(), QUALITY_MIN, QUALITY_MAX, suffix="%",
         )
         quality.settingChanged.connect(self._on_row_setting_changed)
         card.add(quality)
 
         # --- Resolution steppers ---
+        # Values are normalised to what core.config will actually hold after a
+        # load (see _sanitised_dimension): 0/None is rewritten by the validator
+        # and stripped on write, so showing it here would display a value that
+        # silently reverts to the default resolution on the next launch.
         width_row = StepperRow(
-            "Capture width", "Camera frame width (0 = camera default)", "width",
-            beh.get("width") or 0, DIM_MIN, DIM_MAX, DIM_STEP,
+            "Capture width", "Camera frame width in pixels", "width",
+            _sanitised_dimension("width", beh.get("width")),
+            DIM_MIN, DIM_MAX, DIM_STEP,
         )
         height_row = StepperRow(
-            "Capture height", "Camera frame height (0 = camera default)", "height",
-            beh.get("height") or 0, DIM_MIN, DIM_MAX, DIM_STEP,
+            "Capture height", "Camera frame height in pixels", "height",
+            _sanitised_dimension("height", beh.get("height")),
+            DIM_MIN, DIM_MAX, DIM_STEP,
         )
         for r in (width_row, height_row):
             r.settingChanged.connect(self._on_row_setting_changed)
@@ -986,6 +1022,8 @@ class SettingsPage(QWidget):
         card.add(retake_row)
 
         self._behavior_rows = [quality, width_row, height_row, timer_row, retake_row]
+        # Rows that need a control-level revert when a write fails.
+        self._row_by_key.update({r.key: r for r in self._behavior_rows})
         self._themed.append(self._camera_row)
         self._themed.extend(self._behavior_rows)
         column.addWidget(card)
@@ -1000,6 +1038,7 @@ class SettingsPage(QWidget):
         )
         self._highlights_row.settingChanged.connect(self._on_row_setting_changed)
         hl_card.add(self._highlights_row)
+        self._row_by_key[self._highlights_row.key] = self._highlights_row
 
         self._recap_anim_row = ToggleRow(
             "Recap animations",
@@ -1318,21 +1357,78 @@ class SettingsPage(QWidget):
     # Persistence
     # ---------------------------------------------------------
     def _clamped_quality(self) -> int:
-        raw = self.cfg.get("behavior", {}).get("quality", 90)
+        raw = self.cfg.get("behavior", {}).get("quality", QUALITY_FALLBACK)
         try:
-            return max(1, min(100, int(raw)))
+            return max(QUALITY_MIN, min(QUALITY_MAX, int(raw)))
         except (TypeError, ValueError):
-            return 90
+            return QUALITY_FALLBACK
+
+    def _clamped_int(self, value: Any, low: int, high: int, fallback: int) -> int:
+        try:
+            return max(low, min(high, int(value)))
+        except (TypeError, ValueError):
+            return fallback
 
     def _on_row_setting_changed(self, key: str, value: Any):
         if key == "quality":
-            try:
-                value = max(1, min(100, int(value)))  # clamp pre-persist (validation raises otherwise)
-            except (TypeError, ValueError):
-                return
+            # clamp pre-persist (validation raises otherwise)
+            value = self._clamped_int(value, QUALITY_MIN, QUALITY_MAX,
+                                      QUALITY_FALLBACK)
+        elif key in _DIM_KEYS:
+            # core.config rewrites width/height 0 -> None and write_config drops
+            # the key, so an out-of-range value would silently revert at the next
+            # boot. Clamp into the range the validator really accepts.
+            value = self._clamped_int(value, DIM_MIN, DIM_MAX,
+                                      _sanitised_dimension(key, value))
         section = _ROW_KEYS.get(key)
-        if section:
-            self._persist_values({f"{section}.{key}": value})
+        if not section:
+            return
+        if self._persist_values({f"{section}.{key}": value}):
+            return
+        # Write failed and _persist_values already toasted. The control must go
+        # back to what disk actually holds (edge case 6), and because the
+        # requested value never committed it plays the C4 invalid-input shake.
+        if self._revert_row(key):
+            _shake_row(self._row_by_key[key])
+
+    def _disk_value(self, section: str, key: str) -> Any:
+        """Read one value straight from config.toml (disk wins over request).
+
+        Falls back to DEFAULT_CONFIG when the key is absent or was rewritten to
+        None by _validate_behavior, so callers always get a usable value.
+        """
+        default = DEFAULT_CONFIG.get(section, {}).get(key)
+        try:
+            data = load_config(self.config_path).get(section, {})
+            value = data.get(key, default) if isinstance(data, dict) else default
+        except Exception:
+            value = default
+        return default if value is None else value
+
+    def _revert_row(self, key: str) -> bool:
+        """Snap one control back to the value config.toml holds.
+
+        Returns True when the control actually moved (i.e. the shown value was
+        rejected), which is what drives the C4 shake.
+        """
+        row = getattr(self, "_row_by_key", {}).get(key)
+        if row is None:
+            return False
+        stored = self._disk_value("behavior", key)
+        if key in _DIM_KEYS:
+            stored = _sanitised_dimension(key, stored)
+        try:
+            if isinstance(row, (StepperRow, SliderRow)):
+                before = row.value()
+                row.set_value_silent(int(stored))
+                return row.value() != before
+            if isinstance(row, ToggleRow):
+                before = row.switch_w.isChecked()
+                row.set_checked_silent(bool(stored))
+                return row.switch_w.isChecked() != before
+        except (TypeError, ValueError, RuntimeError):
+            return False
+        return False
 
     def _persist_values(self, updates: Dict[str, Any]) -> bool:
         """Instant-apply: read-modify-write config.toml atomically.
@@ -1341,7 +1437,9 @@ class SettingsPage(QWidget):
         another process toggling autostart) are never silently reverted. On
         write failure the fresh dict is discarded and self.cfg stays untouched;
         the snapshot-revert restores prior values preserving absence vs
-        explicit-None semantics.
+        explicit-None semantics. Returns False after raising the ERROR toast —
+        callers are responsible for snapping their control back (see
+        _revert_row) so the UI never shows an unsaved value.
         """
         try:
             fresh = load_config(self.config_path)
