@@ -1,6 +1,6 @@
 # gui/widgets/recap/__init__.py
 from .stage import ProgressDots, RecapCardHost, RecapScrim, RecapStage
-from .recap_painter import render_card_png
+from .recap_painter import render_card_png, render_deck_pngs
 
 __all__ = [
     "RecapStage",
@@ -8,4 +8,5 @@ __all__ = [
     "RecapCardHost",
     "ProgressDots",
     "render_card_png",
+    "render_deck_pngs",
 ]
