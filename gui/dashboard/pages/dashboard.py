@@ -20,12 +20,13 @@ from core.storage import delete_path
 from core.paths import get_app_paths
 from core.config import ensure_config, apply_config_to_paths, load_config, write_config
 from core.recap import (
-    MILESTONE_RUNGS,
-    comeback_signal,
-    mood_shift,
+    DISMISS_COMEBACK,
+    DISMISS_MOOD_SHIFT,
+    DISMISS_NEW_RECORD,
+    compute_chip_candidates,
     recap_eligible_periods,
     recap_period_id,
-    streak_record_active,
+    recap_ready_period,
 )
 from core.thumbs import load_display_pixmap
 from core.index_api import get_api
@@ -517,6 +518,18 @@ def _remember_behavior_list(config_path, key: str, value: str,
         return False
 
 
+# Presentation for one engine chip kind: (icon filename, theme color key).
+# Keys are core.recap's frozen `kind` values, which are also the argument
+# chipActivated carries — keep this in sync with core.recap.DISMISS_* /
+# CHIP_SCORES rather than parsing dismissal ids here.
+_CHIP_PRESENTATION = {
+    DISMISS_NEW_RECORD: ("celebration.svg", "tertiary"),
+    "milestone": ("streak.svg", "primary"),
+    DISMISS_COMEBACK: ("selfie.svg", "secondary"),
+    DISMISS_MOOD_SHIFT: ("light.svg", "secondary"),
+}
+
+
 class HighlightStrip(QWidget):
     """Highlights arbiter (§3): recap_ready chip > up to 3 chips >
     OnThisDayBanner > collapse to 0. Dismissals persist to
@@ -569,15 +582,11 @@ class HighlightStrip(QWidget):
                                if isinstance(i, str)}
 
         periods: List[Tuple] = []
-        dates: List[str] = []
-        moods: List[dict] = []
         api = None
         try:
             api = get_api(self._app_paths)
             if enabled:
                 periods = recap_eligible_periods(api)
-            dates = api.get_all_capture_dates()
-            moods = api.get_moods_since(60)
         except Exception:
             logger.debug("highlight_inputs_unavailable", exc_info=True)
 
@@ -587,9 +596,7 @@ class HighlightStrip(QWidget):
 
         if enabled:
             # 1) recap_ready — newest eligible period not yet seen or dismissed
-            ready = next((p for p in periods
-                          if recap_period_id(p) not in seen
-                          and recap_period_id(p) not in dismissed), None)
+            ready = recap_ready_period(periods, seen=seen, dismissed=dismissed)
             if ready is not None:
                 kind, y, m = (list(ready) + [None])[:3]
                 label = (f"Your {pycal.month_name[int(m)]} recap is ready"
@@ -608,48 +615,27 @@ class HighlightStrip(QWidget):
                 self._layout.addWidget(chip, 0, Qt.AlignVCenter)
                 built = True
             else:
-                # 2) scored chips (cap 3, drop lowest)
-                candidates: List[Tuple[int, str, str, str, str, str]] = []
-                current, best, has_today = calculate_streaks(dates)
-                for rung in sorted(MILESTONE_RUNGS, reverse=True):
-                    mid = f"milestone:{rung}"
-                    if current >= rung and mid not in dismissed:
-                        candidates.append((
-                            80, mid, f"{rung}-day streak",
-                            f"Your current streak crossed the {rung}-day milestone",
-                            "streak.svg", "primary"))
-                        break
-                rid = "new_record"
-                if rid not in dismissed and streak_record_active(dates,
-                                                                 today=today):
-                    candidates.append((
-                        90, rid, "New personal record",
-                        f"{current} days — your longest streak yet",
-                        "celebration.svg", "tertiary"))
-                cb = comeback_signal(dates, today=today)
-                if cb is not None and "comeback" not in dismissed:
-                    candidates.append((
-                        60, "comeback", cb.title, cb.subtitle,
-                        "selfie.svg", "secondary"))
-                shift = mood_shift(moods, today=today)
-                if shift is not None and "mood_shift" not in dismissed:
-                    candidates.append((
-                        50, "mood_shift", shift.title, shift.subtitle,
-                        "light.svg", "secondary"))
-
-                candidates.sort(key=lambda c: -c[0])
-                kept = candidates[:self.MAX_CHIPS]
+                # 2) scored chips (cap 3, drop lowest). Arbitration, ladder,
+                # frozen dismissal ids and the mood window all live in
+                # core.recap so the engine and the strip cannot drift again;
+                # only the presentation (icon + theme color per kind) is
+                # local. The ids written below are the same strings users
+                # already have in behavior.dismissed_highlights.
+                kept = compute_chip_candidates(
+                    api, today=today, dismissed=sorted(dismissed),
+                    top_n=self.MAX_CHIPS)
                 if kept:
                     row_holder = QWidget()
                     row = QHBoxLayout(row_holder)
                     row.setContentsMargins(0, 0, 0, 0)
                     row.setSpacing(6)
                     row.addStretch()
-                    for score, did, label, reason, icon, color_key \
-                            in reversed(kept):
+                    for cand in reversed(kept):
+                        icon, color_key = _CHIP_PRESENTATION.get(
+                            cand.kind, ("sparkles.svg", "secondary"))
                         chip = HighlightChip(
-                            did.split(":", 1)[0], label, reason=reason,
-                            dismiss_id=did, icon_name=icon,
+                            cand.kind, cand.label, reason=cand.reason,
+                            dismiss_id=cand.dismiss_id, icon_name=icon,
                             color_key=color_key)
                         chip.activated.connect(self.chipActivated.emit)
                         chip.dismissed.connect(self._on_dismissed)
