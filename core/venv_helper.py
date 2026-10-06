@@ -32,6 +32,25 @@ def _pfx(tag: str) -> str:
     return f"[{tag}]"
 
 
+# Child-process output is UTF-8 regardless of the parent's console codepage.
+# Without an explicit encoding, Python decodes it with the *locale* encoding,
+# so pip's UTF-8 output raises UnicodeDecodeError under a cp1252 Windows
+# console (RC4). errors="replace" keeps a mangled byte from turning a
+# recoverable pip warning into a crash. Applied to every subprocess.run()
+# below that decodes child output.
+_UTF8_DECODE = {"encoding": "utf-8", "errors": "replace"}
+
+
+def _stderr_text(proc) -> str:
+    """Return proc.stderr as text, tolerating bytes/undecodable output."""
+    err = getattr(proc, "stderr", None)
+    if not err:
+        return ""
+    if isinstance(err, bytes):
+        return err.decode("utf-8", errors="replace").strip()
+    return str(err).strip()
+
+
 def venv_python(venv_dir: Path) -> Path:
     """Return the python executable inside a venv directory."""
     if platform.system().lower() == "windows":
@@ -67,7 +86,11 @@ def pip_install(python_exe: Path, requirements: Path, *, quiet: bool = False) ->
     try:
         if quiet:
             proc = subprocess.run(
-                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                **_UTF8_DECODE,
             )
         else:
             proc = subprocess.run(cmd)
@@ -77,7 +100,7 @@ def pip_install(python_exe: Path, requirements: Path, *, quiet: bool = False) ->
                 print(f"\n{_pfx('pip')} Packages installed successfully")
             return True, "requirements installed"
         else:
-            msg = proc.stderr.strip() or "Unknown pip failure"
+            msg = _stderr_text(proc) or "Unknown pip failure"
             return False, f"pip install failed ({proc.returncode}): {msg}"
     except Exception as e:
         return False, f"pip install error: {e}"
@@ -92,7 +115,13 @@ def pip_run(python_exe: Path, args: list[str], *, quiet: bool = False) -> Tuple[
     print(f"{_pfx('pip')} Running pip {' '.join(args)}")
     try:
         if quiet:
-            proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                **_UTF8_DECODE,
+            )
         else:
             proc = subprocess.run(cmd)
         if proc.returncode == 0:
@@ -138,6 +167,8 @@ def ensure_venv(
 
     # Upgrade pip
     print(f"{_pfx('pip')} Upgrading pip...")
+    # No encoding kwargs needed here: streams are either inherited or
+    # DEVNULL, so nothing is decoded in-process.
     subprocess.run(
         [str(py), "-m", "pip", "install", "--upgrade", "pip"],
         stdout=subprocess.DEVNULL if quiet else None,
