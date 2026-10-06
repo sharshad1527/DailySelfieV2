@@ -265,6 +265,8 @@ class DashboardWindow(DashboardShell):
         self._recap_period = ("month", 0, None)
         # Live photo viewer (lightbox); re-opened, never stacked.
         self._photo_viewer: Optional[PhotoViewer] = None
+        # The surface the carousel click is currently bound to.
+        self._carousel_bound = None
 
         self._app_paths = app_paths
         self._config_path = (Path(config_path) if config_path else
@@ -341,14 +343,6 @@ class DashboardWindow(DashboardShell):
         # neither of those fires for an edit-in-place.
         self._calendar_page.dataChanged.connect(self._dashboard_page.refresh)
 
-        # Carousel photo click -> full-size viewer (no consumer until now).
-        # The carousel is rebuilt with the whole surface on every refresh, so
-        # a one-shot connect in __init__ would die on the first rebuild;
-        # _bind_carousel re-attaches after each one (see _install_carousel_hook).
-        self._carousel_bound = None
-        self._install_carousel_hook()
-        self._bind_carousel()
-
         # ---- Highlights & recaps wiring (§8) ----
         self._dashboard_page.recapLaunchRequested.connect(self._open_recap)
         self._calendar_page.recapRequested.connect(
@@ -356,6 +350,13 @@ class DashboardWindow(DashboardShell):
         self._settings_page.recapLaunchRequested.connect(self._open_recap)
         self._dashboard_page.throwbackOpenRequested.connect(
             self._open_throwback_in_calendar)
+
+        # Carousel photo click -> full-size viewer (item_clicked had no
+        # consumer). The carousel is rebuilt with the whole surface on every
+        # refresh, so a one-shot connect in __init__ would die on the first
+        # rebuild; _bind_carousel re-attaches after each one.
+        self._install_carousel_hook()
+        self._bind_carousel()
 
     # ---------------------------------------------------------
     # Recap stage (§8)
