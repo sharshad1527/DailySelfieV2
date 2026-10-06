@@ -78,7 +78,8 @@ TIMER_MIN, TIMER_MAX = 0, 60
 # int (or null) for width/height and rewrites 0 -> None, which write_config then
 # strips — so a persisted 0 never survives a round trip and the key silently
 # reverts to the DEFAULT_CONFIG resolution on the next load. Stepper bounds must
-# therefore match the validator's real minimum. See _sanitised_dimension.
+# therefore match the validator's real minimum. core/config.py is the root
+# cause — see _sanitised_dimension and the recommendation in the report.
 DIM_MIN, DIM_MAX, DIM_STEP = 1, 4096, 80
 _DIM_KEYS = ("width", "height")
 QUALITY_MIN, QUALITY_MAX, QUALITY_FALLBACK = 1, 100, 90
@@ -1021,11 +1022,32 @@ class SettingsPage(QWidget):
         retake_row.settingChanged.connect(self._on_row_setting_changed)
         card.add(retake_row)
 
+        # --- Animations (reduced-motion gate) ---
+        # behavior.motion_enabled gates every animation site in the app (page
+        # transitions, card lifts, carousel, chip/card entrances) but had no
+        # control at all, so motion was hard-coded on for everyone. It lives in
+        # Behavior, not Highlights & Recaps: the key is a behavior.* preference,
+        # the gate is app-wide rather than recap-specific, and the spec pins this
+        # page to four sections.
+        # `toggled` only — NOT settingChanged — because _on_motion_toggled has to
+        # reconcile with disk truth on failure and must write exactly once.
+        motion_on = mt.is_motion_enabled(self.cfg)
+        self._motion_row = ToggleRow(
+            "Animations",
+            "Page transitions, card lifts and the recap carousel. When off, "
+            "everything jumps straight to its new state.",
+            "motion_enabled", motion_on,
+        )
+        self._motion_row.toggled.connect(self._on_motion_toggled)
+        self._motion_row_desc(motion_on)
+        card.add(self._motion_row)
+
         self._behavior_rows = [quality, width_row, height_row, timer_row, retake_row]
         # Rows that need a control-level revert when a write fails.
         self._row_by_key.update({r.key: r for r in self._behavior_rows})
         self._themed.append(self._camera_row)
         self._themed.extend(self._behavior_rows)
+        self._themed.append(self._motion_row)
         column.addWidget(card)
 
         # --- Highlights & Recaps section ---
@@ -1040,15 +1062,6 @@ class SettingsPage(QWidget):
         hl_card.add(self._highlights_row)
         self._row_by_key[self._highlights_row.key] = self._highlights_row
 
-        self._recap_anim_row = ToggleRow(
-            "Recap animations",
-            "Follows the Motion setting (gui/theme motion gate)",
-            "motion_enabled", mt.is_motion_enabled(self.cfg),
-        )
-        self._recap_anim_row.set_checked_silent(mt.is_motion_enabled(self.cfg))
-        self._recap_anim_row.set_enabled_state(False)  # informational mirror
-        hl_card.add(self._recap_anim_row)
-
         self._recap_launch_row = ButtonRow(
             "Monthly recap", "Rewatch a finished month as a story deck",
         )
@@ -1057,7 +1070,6 @@ class SettingsPage(QWidget):
         hl_card.add(self._recap_launch_row)
 
         self._themed.append(self._highlights_row)
-        self._themed.append(self._recap_anim_row)
         self._themed.append(self._recap_launch_row)
         column.addWidget(hl_card)
         self._refresh_recap_availability()
@@ -1247,8 +1259,17 @@ class SettingsPage(QWidget):
         if tc is None:
             return
         tc.set_theme(name)
+        # WORKAROUND for a silent backend failure — do not "simplify" this away.
+        # ThemeController.set_theme() catches ThemeLoaderError with a bare
+        # `except ThemeLoaderError: pass` (gui/theme/theme_controller.py), so a
+        # bad theme name raises nothing, logs nothing and never emits
+        # themeChanged: a failure is indistinguishable from success.
+        # docs/design/settings-page.md "Backend asks" #3 asks for that handler to
+        # log; until it does, the only observable signal is theme_name, so we
+        # compare it against the requested name and surface the failure as an
+        # ERROR toast + revert the selection. With logging added in the
+        # controller, keep this check anyway — the toast is the user-facing half.
         if tc.theme_name != name:
-            # set_theme fails silently; revert the visual selection.
             logger.warning("theme_apply_failed", extra={"meta": {"theme": name}})
             self._toast("ERROR", f"Couldn't load theme '{name}'")
             self._sync_theme_selection()
@@ -1429,6 +1450,47 @@ class SettingsPage(QWidget):
         except (TypeError, ValueError, RuntimeError):
             return False
         return False
+
+    # ---------------------------------------------------------
+    # Motion gate (behavior.motion_enabled)
+    # ---------------------------------------------------------
+    def _on_motion_toggled(self, requested: bool):
+        """Persist behavior.motion_enabled; disk wins over the request.
+
+        The switch has already flipped optimistically (Qt flips before
+        emitting), which is the optimistic-flip-then-reconcile shape the spec
+        asks of the shell toggles: on success nothing else happens, on failure
+        the switch snaps back to the value config.toml really holds and the
+        ERROR toast has already been raised by _persist_values.
+        """
+        requested = bool(requested)
+        if not self._persist_values({"behavior.motion_enabled": requested}):
+            if self._reconcile_motion_row():
+                _shake_row(self._motion_row)
+            return
+        self._motion_row_desc(requested)
+
+    def _reconcile_motion_row(self) -> bool:
+        """Snap the motion switch to disk truth. True when it actually moved."""
+        stored = self._disk_value("behavior", "motion_enabled")
+        row = self._motion_row
+        try:
+            before = row.switch_w.isChecked()
+            row.set_checked_silent(bool(stored))
+        except RuntimeError:
+            return False  # page torn down
+        self._motion_row_desc(bool(stored))
+        return row.switch_w.isChecked() != before
+
+    def _motion_row_desc(self, enabled: bool):
+        """Keep the subtitle truthful about what the switch currently does."""
+        self._motion_row.desc_lbl.setText(
+            "Page transitions, card lifts and the recap carousel. When off, "
+            "everything jumps straight to its new state."
+            if enabled else
+            "Animations are off — transitions and lifts jump straight to "
+            "their new state."
+        )
 
     def _persist_values(self, updates: Dict[str, Any]) -> bool:
         """Instant-apply: read-modify-write config.toml atomically.

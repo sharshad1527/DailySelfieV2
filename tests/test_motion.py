@@ -9,7 +9,6 @@ these stay runnable in the sandboxed core suite.
 """
 import copy
 import os
-import time
 
 import pytest
 
