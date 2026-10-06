@@ -16,6 +16,8 @@ from typing import Any, Callable, Dict, List, Optional
 from PySide6.QtCore import (
     Property,
     QEasingCurve,
+    QParallelAnimationGroup,
+    QPoint,
     QPropertyAnimation,
     Qt,
     QThread,
@@ -30,6 +32,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QFrame,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -72,6 +75,13 @@ _ROW_KEYS: Dict[str, str] = {
 
 TIMER_MIN, TIMER_MAX = 0, 60
 DIM_MIN, DIM_MAX, DIM_STEP = 0, 4096, 80
+
+# C4 "invalid input shake": ±4px ×3 @40ms Linear (motion-gated).
+_SHAKE_AMPLITUDE_PX = 4
+_SHAKE_HALF_CYCLE_MS = 40
+_SHAKE_CYCLES = 3
+# C4 "value commit label": the committed value rises this far while fading in.
+_VALUE_COMMIT_RISE_PX = 8
 
 
 # -------------------------------------------------------------
@@ -118,9 +128,11 @@ class ManagerCallThread(QThread):
 class ToggleSwitch(QAbstractButton):
     """Custom painted switch (track h28 w48 r14, thumb d20).
 
-    Thumb slides ON 200ms OutCubic / OFF 150ms InCubic per motion tokens.
-    Note: motion gating via behavior.motion_enabled skipped this round —
-    that key does not exist yet in DEFAULT_CONFIG.
+    C4 (motion-system.md): thumb slides ON 200ms OutCubic / OFF 150ms InCubic,
+    gated on behavior.motion_enabled — with reduced motion the thumb jumps
+    straight to the target position. Track colour swaps instantly at t=0
+    (colour leads motion) because paintEvent reads isChecked() directly while
+    only the thumb position animates.
     """
 
     def __init__(self, parent=None):
@@ -160,12 +172,19 @@ class ToggleSwitch(QAbstractButton):
 
     def _animate_to(self, checked: bool):
         self._anim.stop()
-        self._anim.setDuration(200 if checked else 150)
+        target = 1.0 if checked else 0.0
+        # C4 reduced motion: jump to the end state, never animate. The gate is
+        # read from config at trigger time, which is what the spec mandates; the
+        # switch that turns motion off therefore still slides (the row persists
+        # the new value after this slot runs) — nothing else is in flight then.
+        if not mt.is_motion_enabled():
+            self._pos = target
+            self.update()
+            return
+        self._anim.setDuration(mt.duration_base if checked else mt.duration_fast)
         self._anim.setStartValue(self._pos)
-        self._anim.setEndValue(1.0 if checked else 0.0)
-        self._anim.setEasingCurve(
-            QEasingCurve.OutCubic if checked else QEasingCurve.InCubic
-        )
+        self._anim.setEndValue(target)
+        self._anim.setEasingCurve(mt.curve_enter if checked else mt.curve_exit)
         self._anim.start()
 
     def snap(self, checked: bool):
@@ -327,6 +346,92 @@ def _combo_style(v) -> str:
 
 
 # -------------------------------------------------------------
+# C4 row motion helpers (motion-system.md)
+# -------------------------------------------------------------
+def _animate_value_commit(label: QLabel):
+    """C4 'value commit label': +8px rise with fade-in, 150ms OutCubic.
+
+    Motion-gated: with reduced motion the committed value just appears. The
+    opacity effect is transient — attached for the flight only and detached in
+    `finished` so the steady state stays effect-free (performance rule 2), and
+    the group is parked on the label as a GC guard (rule 9).
+    """
+    if not mt.is_motion_enabled():
+        return
+    running = getattr(label, "_commit_anim", None)
+    if running is not None:
+        running.stop()
+
+    base = QPoint(label.x(), label.y())
+    effect = QGraphicsOpacityEffect(label)
+    effect.setOpacity(0.0)
+    label.setGraphicsEffect(effect)
+
+    pos_anim = QPropertyAnimation(label, b"pos", label)
+    pos_anim.setDuration(mt.duration_fast)
+    pos_anim.setEasingCurve(mt.curve_enter)
+    pos_anim.setStartValue(QPoint(base.x(), base.y() + _VALUE_COMMIT_RISE_PX))
+    pos_anim.setEndValue(base)
+
+    fade_anim = QPropertyAnimation(effect, b"opacity", label)
+    fade_anim.setDuration(mt.duration_fast)
+    fade_anim.setEasingCurve(mt.curve_enter)
+    fade_anim.setStartValue(0.0)
+    fade_anim.setEndValue(1.0)
+
+    group = QParallelAnimationGroup(label)
+    group.addAnimation(pos_anim)
+    group.addAnimation(fade_anim)
+
+    def _detach():
+        try:
+            if label.graphicsEffect() is effect:
+                label.setGraphicsEffect(None)
+        except RuntimeError:
+            pass  # label torn down mid-flight
+        label._commit_anim = None
+
+    group.finished.connect(_detach)
+    label._commit_anim = group
+    group.start()
+
+
+def _shake_row(row: QWidget):
+    """C4 invalid-input shake: ±4px ×3 @40ms Linear (motion-gated).
+
+    Played when a requested value never committed (write failure), so the
+    rejection is felt as well as toasted. Reduced motion skips it entirely —
+    the control still snaps back and the ERROR toast still fires. Follows the
+    lift-mixin precedent of animating `pos` on a layout-managed child; the last
+    keyframe restores the original position.
+    """
+    if not mt.is_motion_enabled():
+        return
+    running = getattr(row, "_shake_anim", None)
+    if running is not None:
+        running.stop()
+
+    base = QPoint(row.x(), row.y())
+    anim = QPropertyAnimation(row, b"pos", row)
+    anim.setDuration(_SHAKE_HALF_CYCLE_MS * 2 * _SHAKE_CYCLES)
+    anim.setEasingCurve(QEasingCurve.Linear)
+
+    steps = _SHAKE_CYCLES * 2
+    for i in range(steps):
+        offset = _SHAKE_AMPLITUDE_PX if i % 2 == 0 else -_SHAKE_AMPLITUDE_PX
+        # setKeyValueAt steps are normalised to 0..1, not percent.
+        anim.setKeyValueAt((i + 1) / steps, QPoint(base.x(), base.y() + offset))
+    anim.setKeyValueAt(1.0, base)
+
+    def _release():
+        row._shake_anim = None
+
+    anim.finished.connect(_release)
+    row._shake_anim = anim
+    anim.start()
+
+
+# -------------------------------------------------------------
 # Rows
 # -------------------------------------------------------------
 class ToggleRow(QWidget):
@@ -420,8 +525,12 @@ class SliderRow(QWidget):
     def _update_label(self, value: int):
         self.value_lbl.setText(f"{int(value)}{self._suffix}")
 
+    def value(self) -> int:
+        return int(self.slider.value())
+
     def _on_value_changed(self, value: int):
         self._update_label(value)
+        _animate_value_commit(self.value_lbl)
         self.valueChanged.emit(int(value))
         self.settingChanged.emit(self.key, int(value))
 
@@ -584,6 +693,9 @@ class StepperRow(QWidget):
     def _clamp(self, value: int) -> int:
         return max(self.minimum, min(self.maximum, int(value)))
 
+    def value(self) -> int:
+        return int(self._value)
+
     def _step_down(self):
         self.set_value(self._value - self.step)
 
@@ -596,6 +708,7 @@ class StepperRow(QWidget):
         self.minus_btn.setEnabled(self._value > self.minimum)
         self.plus_btn.setEnabled(self._value < self.maximum)
         if emit:
+            _animate_value_commit(self.value_lbl)
             self.valueChanged.emit(self._value)
             self.settingChanged.emit(self.key, self._value)
 
