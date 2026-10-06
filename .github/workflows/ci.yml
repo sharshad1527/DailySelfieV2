@@ -9,6 +9,12 @@
 #   open an X display.
 # - Windows matters: this repo has shipped Windows-only bugs before
 #   (pylnk3-class issues), so both OSes must stay green independently.
+#
+# Skips are a SIGNAL, not a rounding error. This suite used to look green on
+# Windows while ~25 of its tests silently skipped (the TZ fixture needs POSIX
+# time.tzset), and nobody noticed — a skip is not a failure. The "Skip gate"
+# step below fails the build on any skip that is not explicitly allow-listed,
+# so a cross-platform hole cannot hide again.
 
 name: CI
 
@@ -53,10 +59,15 @@ jobs:
           python-version: "3.13"
           cache: pip            # cache the pip download wheelhouse keyed on requirements.txt
 
+      # requirements.txt stays the single source of RUNTIME truth — the app's own
+      # installer pip-installs it into the venv. Dev/test tooling lives in the
+      # PEP 735 `dev` group in pyproject.toml and is installed here with
+      # `pip install --group dev` (needs pip >= 25.1; the upgrade below gets it).
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install --group dev
         # Note: requirements.txt uses `pylnk3; sys_platform == "win32"` so the
         # Windows job gets it and Ubuntu skips it — verified pure-Python, no
         # compiler needed on either OS.
@@ -72,11 +83,88 @@ jobs:
 
       # Fast syntax gate over the real source trees (not tests): catches
       # "edited on one OS, broke syntax" and stray merge artifacts in seconds,
-      # before pytest spends time collecting.
+      # before pytest spends time collecting. Covers autostart/ and
+      # desktop_entry/ too — those hold the OS backends.
       - name: Compile gate (syntax check)
-        run: python -m compileall -q core gui DailySelfie.py
+        run: python -m compileall -q core gui autostart desktop_entry DailySelfie.py
 
+      # Lint gate. Narrow rule set on purpose — see [tool.ruff] in pyproject.toml
+      # for why: the full E4/E7/F set is ~95 pre-existing findings in gui/, and a
+      # lint step that is red on day one gets deleted rather than trusted. This
+      # subset (syntax errors, bad excepts/comparisons, broken unpacking) is green
+      # today and still catches correctness-class breakage. Version comes from
+      # the dev group, so config and CI cannot drift apart.
+      - name: Lint (ruff)
+        run: ruff check .
+
+      # One pytest run does everything: tests + coverage + JUnit XML. No path
+      # argument on purpose — it proves [tool.pytest.ini_options] testpaths is
+      # wired, so a bare `pytest` runs the whole suite. `-ra` (from addopts)
+      # prints a reason for every skip; `--strict-markers` makes an unregistered
+      # marker an error instead of a warning. The coverage floor is
+      # [tool.coverage.report] fail_under.
       - name: Run test suite (core-only, offline, sandboxed)
-        run: python -m pytest tests/ -q --tb=short
-        # Same invocation validated locally on 3.13: `QT_QPA_PLATFORM=offscreen
-        # python -m pytest tests/ -q --tb=short` -> 59 passed.
+        run: python -m pytest --cov --cov-report=term-missing --cov-report=xml --junitxml=junit.xml
+
+      # Fail loudly on unexpected skips.
+      #
+      # Deliberately narrow allowlist: an entry means "we know about this skip
+      # and have accepted it". Anything not matching fails the build. Today the
+      # only accepted skip is the POSIX-only TZ fixture, which is being fixed;
+      # when it lands, delete that pattern and this gate goes to zero tolerance.
+      #
+      # `shell: bash` is set explicitly because this step uses a heredoc — the
+      # default on windows-latest is PowerShell, which cannot read one. Git Bash
+      # ships on every GitHub-hosted runner, so this works on both matrix legs
+      # and keeps the script readable instead of collapsed into a `python -c`
+      # one-liner that would need escaping for two different shells.
+      #
+      # Stdlib only, so the gate cannot itself break CI via a missing dep.
+      - name: Skip gate (unexpected skips fail the build)
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import re
+          import sys
+          import xml.etree.ElementTree as ET
+
+          # Narrow allowlist: accepted skips, by regex over the skip reason.
+          ALLOWED_SKIP_REASONS = [
+              r"time\.tzset \(POSIX-only\)",
+          ]
+          allowed = [re.compile(p) for p in ALLOWED_SKIP_REASONS]
+
+          cases = [
+              tc
+              for tc in ET.parse("junit.xml").getroot().iter("testcase")
+              if tc.find("skipped") is not None
+          ]
+
+          def reason(tc):
+              el = tc.find("skipped")
+              return ((el.get("message") or "") + " " + (el.text or "")).strip()
+
+          unexpected = [
+              tc for tc in cases if not any(p.search(reason(tc)) for p in allowed)
+          ]
+
+          for tc in unexpected:
+              print("UNEXPECTED SKIP: %s::%s -- %s"
+                    % (tc.get("classname"), tc.get("name"), reason(tc)))
+          print("skip gate: %d skipped, %d allow-listed, %d unexpected"
+                % (len(cases), len(cases) - len(unexpected), len(unexpected)))
+          sys.exit(1 if unexpected else 0)
+          PY
+
+      # Upload reports even on failure so a red run stays diagnosable.
+      - name: Upload test + coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-artifacts-${{ matrix.os }}
+          path: |
+            junit.xml
+            coverage.xml
+          if-no-files-found: ignore
+          retention-days: 7
