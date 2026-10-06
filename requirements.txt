@@ -3,6 +3,13 @@ opencv-python>=4.8.0
 numpy>=1.25.0
 tomli-w
 
+# IANA timezone database for stdlib `zoneinfo` (used by core/timeutils.py).
+# Harmless on POSIX (where the OS database is used first) but REQUIRED on
+# Windows, which ships no system tz database, and on slim containers without
+# /usr/share/zoneinfo. Without it, ZoneInfo("Asia/Kolkata") raises and every
+# day-bucketing call in the app and the TZ tests in the test suite fail.
+tzdata>=2024.1
+
 # GUI Framework
 PySide6>=6.6.0
 

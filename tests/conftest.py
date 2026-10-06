@@ -203,7 +203,7 @@ def set_tz(monkeypatch):
     skipped on windows-latest, so ~25 tests never ran there. core.timeutils
     now takes an explicit zoneinfo tz, so we point its module-level default
     override at the requested zone, and retarget the remaining implicit-local
-    `datetime` call sites via a temporary class shim (see _datetime_shim).
+    datetime call sites via a temporary class shim (see _datetime_shim).
 
     os.environ['TZ'] and time.tzset() are deliberately never touched: TZ
     tests must mean the same thing on Windows and Linux, and the process-wide
