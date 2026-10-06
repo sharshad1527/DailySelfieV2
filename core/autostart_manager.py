@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from core.logging import get_logger
 from core.paths import get_app_paths
-from core.config import load_config, write_config, apply_config_to_paths
+from core.config import load_config, write_config_safe, apply_config_to_paths
 from autostart import enable_autostart, disable_autostart
 
 logger = get_logger("autostart_manager")
@@ -54,9 +54,11 @@ def set_autostart(enabled: bool) -> None:
         disable_autostart(paths)
         cfg["installation"]["autostart"] = False
 
-    # Persist config (single write path; bootstrap writer is not used here)
+    # Persist config. write_config_safe keeps this toggle working on a bare
+    # interpreter where tomli-w is absent (falls back to the dependency-free
+    # writer); with tomli-w present it is byte-identical to write_config().
     try:
-        write_config(config_path, cfg)
+        write_config_safe(config_path, cfg)
     except Exception:
         logger.exception(
             "autostart_config_write_failed",

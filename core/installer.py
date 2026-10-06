@@ -15,19 +15,29 @@ This module:
 """
 from __future__ import annotations
 
+import subprocess
 import sys
 import os
 import stat
 import platform
 import copy
 from pathlib import Path
-import platform
 
-from core.venv_helper import ensure_venv
+from core.venv_helper import ensure_venv, venv_python
 from core.config import DEFAULT_CONFIG, write_config_bootstrap
-from core.autostart_manager import set_autostart
-from core.desktop_entry_manager import set_desktop_entry
 from core.spinner import Spinner
+
+# Entry point that the freshly built venv interpreter re-runs for the
+# post-install steps. Deliberately NOT imported here: importing these
+# managers at module scope is fine (they are stdlib-only) but calling them
+# in-process would run them under the *system* python, which has neither
+# pylnk3 nor tomli-w. See run_post_install_step().
+_ENTRY_SCRIPT_NAME = "DailySelfie.py"
+
+# Seconds to allow one post-install step before giving up. These steps only
+# create a shortcut / write an autostart flag, so they are near-instant; a
+# generous cap just stops a wedged child from hanging the wizard forever.
+_POST_INSTALL_TIMEOUT_S = 120.0
 
 #----------------------------------------------------------
 # CLI Wrappers (bin/dailyselfie)
@@ -40,23 +50,25 @@ def create_cli_wrapper(install_dir: Path, venv_dir: Path, project_root: Path) ->
 
     os_name = platform.system().lower()
 
+    # venv_python() is the single source of truth for the interpreter layout
+    # (Scripts/python.exe on Windows, bin/python elsewhere) -- do not
+    # re-derive it here.
+    python_exe = venv_python(venv_dir)
+
     # Defining OS Based On Paths
     if os_name == "windows":
         # Create Bin Folder Inside The Install Directory
         bin_dir = install_dir / "bin"
         wrapper_name = "dailyselfie.bat"
-        python_exe = venv_dir / "Scripts" / "Python.exe"
     else:
         # Linux: Use Standard User Bin Directory
         bin_dir = Path.home() / ".local" / "bin"
         wrapper_name = "dailyselfie"
-        python_exe = venv_dir / "bin" / "python"
 
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrapper_path = bin_dir / wrapper_name
-    main_script = project_root / "DailySelfie.py"
+    main_script = project_root / _ENTRY_SCRIPT_NAME
     print(f"\nCreating command-line tool at {wrapper_path}")
-    print(main_script)
 
     # Writing Command Line Content
     try: 
@@ -163,6 +175,106 @@ def _expand(p: str) -> Path:
 
 
 # ---------------------------------------------------------
+# Post-install steps (RC3)
+# ---------------------------------------------------------
+# Post-install steps used to be called in-process, i.e. under whatever
+# interpreter ran the wizard -- the *system* python on a bare machine. The
+# steps need dependencies that only exist inside the venv the wizard just
+# built:
+#   * desktop_entry/windows.py imports `pylnk3` (requirements.txt, win32 only)
+#   * set_desktop_entry / set_autostart persist their flag via
+#     core.config.write_config, which needs `tomli-w`
+# In-process both silently failed: no shortcut, no persisted flag. So they are
+# re-execed as subprocesses against the venv interpreter instead.
+
+# Which lifecycle flag implements each step, and how it reads to the user.
+POST_INSTALL_STEPS = {
+    "desktop_entry": "--create-desktop-entry",
+    "autostart": "--enable-autostart",
+}
+
+
+def plan_post_install_steps(cfg: dict) -> list[str]:
+    """
+    Return the post-install step names to run, based on user choices.
+
+    Pure helper (no I/O) so the wizard's plan is directly testable.
+    """
+    inst = cfg.get("installation", {})
+    steps: list[str] = []
+    if inst.get("create_desktop_entry"):
+        steps.append("desktop_entry")
+    if inst.get("autostart"):
+        steps.append("autostart")
+    return steps
+
+
+def build_post_install_command(
+    venv_py: Path, project_root: Path, step: str
+) -> list[str]:
+    """
+    Build the argv that re-runs one post-install step under the venv python.
+
+    Pure helper: list-args only, so paths with spaces stay safe (RC report
+    "Path handling: all subprocesses use list args").
+    """
+    flag = POST_INSTALL_STEPS[step]
+    return [str(venv_py), str(Path(project_root) / _ENTRY_SCRIPT_NAME), flag]
+
+
+def _describe_process_failure(proc: "subprocess.CompletedProcess") -> str:
+    """Best-effort one-line reason for a failed post-install subprocess."""
+    for stream in (proc.stderr, proc.stdout):
+        if not stream:
+            continue
+        text = stream.strip()
+        if text:
+            lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+            return lines[-1][:400]
+    return f"exit code {proc.returncode}"
+
+
+def run_post_install_step(
+    venv_py: Path, project_root: Path, step: str
+) -> tuple[bool, str]:
+    """
+    Run one post-install step through the freshly built venv interpreter.
+
+    Returns (ok, message). Never raises: a failed shortcut/autostart step must
+    not abort an otherwise-successful install -- the wizard surfaces it as a
+    warning and tells the user how to retry manually.
+    """
+    cmd = build_post_install_command(venv_py, project_root, step)
+    label = step.replace("_", " ")
+    if not Path(cmd[0]).exists():
+        return False, f"{label} failed: venv interpreter missing ({cmd[0]})"
+    if not Path(cmd[1]).exists():
+        return False, f"{label} failed: entry script missing ({cmd[1]})"
+    try:
+        proc = subprocess.run(
+            cmd,
+            # utf-8 + replace so a cp1252 Windows console can never turn pip's
+            # or Python's output into UnicodeDecodeError here (RC4).
+            encoding="utf-8",
+            errors="replace",
+            text=True,
+            capture_output=True,
+            timeout=_POST_INSTALL_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return False, (
+            f"{label} timed out after {_POST_INSTALL_TIMEOUT_S:.0f}s"
+        )
+    except Exception as e:
+        return False, f"{label} failed: {e}"
+
+    if proc.returncode == 0:
+        return True, f"{label} done"
+
+    return False, f"{label} failed: {_describe_process_failure(proc)}"
+
+
+# ---------------------------------------------------------
 # Installer
 # ---------------------------------------------------------
 def run_install(config_dir: Path, requirements_path: Path | None = None) -> None:
@@ -191,7 +303,6 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
     print()
     print(f" Camera index           : {beh['camera_index']}")
     print(f" Resolution             : {beh['width']} x {beh['height']}")
-    print(f" Image format           : {beh['image_format']}")
     print(f" JPEG quality           : {beh['quality']}")
     print(f" Timer duration         : {beh.get('timer_duration', 0)}s")
     print()
@@ -309,39 +420,43 @@ def run_install(config_dir: Path, requirements_path: Path | None = None) -> None
     # Create CLI WRAPPER
     # -------------------------------------------------
     project_root = Path(__file__).absolute().parent.parent
-    print(project_root)
     create_cli_wrapper(install_dir, Path(inst["venv_dir"]), project_root)
 
     # -------------------------------------------------
-    # Desktop entry (single call)
+    # Post-install steps -- Desktop entry + autostart (RC3)
     # -------------------------------------------------
-    if inst.get("create_desktop_entry"):
-        print("\nCreating Desktop Entry...")
-        try:
-            set_desktop_entry(True)
-        except Exception as e:
-            print(f"Failed To Create Entry: {e}")
-    else:
-        print("\nDesktop Entry disabled by user choice.")
+    # Re-exec'd through the venv interpreter we just built: on a bare
+    # system python these steps have no pylnk3 (Windows shortcut) and no
+    # tomli-w (config write), so calling them in-process silently produced
+    # no shortcut and no persisted flag.
+    steps = plan_post_install_steps(cfg)
+    warnings: list[str] = []
 
-    # -------------------------------------------------
-    # Autostart (single call)
-    # -------------------------------------------------
-    if inst.get("autostart"):
-        print("\nEnabling autostart...")
-        try:
-            set_autostart(True)
-        except Exception as e:
-            print(f"Autostart failed: {e}")
-    else:
-        print("\nAutostart disabled by user choice.")
+    if not steps:
+        print("\nDesktop Entry disabled by user choice.")
+        print("Autostart disabled by user choice.")
+
+    for step in steps:
+        print(f"\nEnabling {step.replace('_', ' ')} (via venv)...")
+        ok, msg = run_post_install_step(py, project_root, step)
+        print(f"  {'OK  ' if ok else 'WARN'} {msg}")
+        if not ok:
+            warnings.append(msg)
 
     # -------------------------------------------------
     # Done
     # -------------------------------------------------
     print("\nInstallation complete.")
-    print("You can now run:")
-    print(f"dailyselfie\n")
+    if warnings:
+        # Never fail an otherwise-successful install because a convenience
+        # step failed -- tell the user how to finish it by hand.
+        print("\nSome optional steps did not complete:")
+        for w in warnings:
+            print(f"  ! {w}")
+        print("\nRetry manually with:")
+        print(f'  "{py}" "{project_root / _ENTRY_SCRIPT_NAME}" --create-desktop-entry')
+        print(f'  "{py}" "{project_root / _ENTRY_SCRIPT_NAME}" --enable-autostart')
+    print("\nYou can now run: dailyselfie\n")
 
 
 # ---------------------------------------------------------

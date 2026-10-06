@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from core.logging import get_logger
 from core.paths import get_app_paths
-from core.config import load_config, write_config, apply_config_to_paths
+from core.config import load_config, write_config_safe, apply_config_to_paths
 from desktop_entry import enable_desktop_entry, disable_desktop_entry
 
 logger = get_logger("desktop_entry_manager")
@@ -54,9 +54,11 @@ def set_desktop_entry(enabled: bool) -> None:
         disable_desktop_entry(paths)
         cfg["installation"]["create_desktop_entry"] = False
 
-    # Persist config (single write path; bootstrap writer is not used here)
+    # Persist config. write_config_safe keeps this toggle working on a bare
+    # interpreter where tomli-w is absent (falls back to the dependency-free
+    # writer); with tomli-w present it is byte-identical to write_config().
     try:
-        write_config(config_path, cfg)
+        write_config_safe(config_path, cfg)
     except Exception:
         logger.exception(
             "desktop_entry_config_write_failed",
