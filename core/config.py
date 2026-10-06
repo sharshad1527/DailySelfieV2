@@ -77,12 +77,30 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "width": 1280,
         "height": 720,
 
-        # Image encoding
-        "image_format": "jpg",  # future: png, webp
+        # Image encoding. There is deliberately no `image_format` knob: the
+        # only encoder in core/storage.py writes JPEG, so the old key (which
+        # was validated to "jpg" and rejected otherwise, but read by no
+        # encoder) was a lie that also bricked startup for anyone who
+        # hand-edited it to "png" -- load_config() raised ValueError.
+        # Re-add the key when a real encoder honours it; see
+        # docs/design/README.md ("Out-of-scope v1").
         "quality": 90,
 
         # Capture rules
-        "audit_enabled": True,
+        #
+        # one_photo_per_day is honoured, but HARD-CODED: core/capture.py
+        # refuses to overwrite today's photo unless `allow_retake` is set,
+        # without ever consulting this flag. Until that lands, the key is
+        # documentation of shipped behaviour, not a setting.
+        # TODO(core/capture.py owner): gate the existing-photo check at
+        # capture.py:107-114 on
+        #     cfg["behavior"].get("one_photo_per_day", True)
+        # (capture_once already receives `app_paths`/`allow_retake`; it needs
+        # the behaviour flag threaded in, or the flag read via load_config).
+        # Only then should _validate_behavior() start sanitising it here.
+        #
+        # `audit_enabled` was removed: nothing outside tests ever read it and
+        # writing an audit trail needs core/capture.py + core/logging.py.
         "one_photo_per_day": True,
         "allow_retake": False,
 
@@ -151,10 +169,13 @@ def _validate_behavior(cfg: Dict[str, Any]) -> None:
     """Validate behavior settings for correctness."""
     behavior = cfg.get("behavior", {})
 
-    fmt = behavior.get("image_format", "jpg").lower()
-    if fmt not in ("jpg",):
-        raise ValueError(f"Unsupported image_format: {fmt}")
-    behavior["image_format"] = fmt
+    # image_format: intentionally NOT validated. The key was removed from
+    # DEFAULT_CONFIG because no encoder ever read it (JPEG is hard-coded in
+    # core/storage.py), yet `_validate_behavior` rejected anything but "jpg" —
+    # so a config.toml carrying `image_format = "png"` made load_config() raise
+    # ValueError and stopped the app from starting at all. Unknown keys left in
+    # an existing config.toml are still preserved by _deep_merge and simply
+    # ignored, so old files keep loading.
 
     # Normalize width/height
     for k in ("width", "height"):
@@ -334,6 +355,33 @@ def write_config_bootstrap(config_path: Path, cfg: Dict[str, Any]) -> None:
                 os.unlink(tmp_name)
         except Exception:
             pass
+
+
+#: Value returned by write_config_safe() for each writer it may pick.
+WRITER_TOMLI_W = "tomli_w"
+WRITER_BOOTSTRAP = "bootstrap"
+
+
+def write_config_safe(config_path: Path, cfg: Dict[str, Any]) -> str:
+    """
+    Persist config.toml with whichever TOML writer is importable.
+
+    Prefers write_config() (tomli-w, the canonical writer) and transparently
+    falls back to write_config_bootstrap() when tomli-w is missing, returning
+    which writer was used. Both writers emit the same logical document for the
+    config schema (scalars before sub-tables, None-valued keys omitted), so
+    this is a drop-in for write_config().
+
+    Rationale (DIAG Phase 2): write_config() hard-raises RuntimeError without
+    tomli-w, which made every third-party-free caller (autostart toggle,
+    desktop-entry toggle, theme save) unusable on a bare interpreter -- i.e.
+    exactly the environment the app must bootstrap from.
+    """
+    if tomli_w is None:
+        write_config_bootstrap(config_path, cfg)
+        return WRITER_BOOTSTRAP
+    write_config(config_path, cfg)
+    return WRITER_TOMLI_W
 
 
 def ensure_config(config_dir: Path) -> Dict[str, Any]:
