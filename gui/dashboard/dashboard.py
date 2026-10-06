@@ -39,6 +39,16 @@ class DashboardWindow(DashboardShell):
         self._page_switch_endpos = None
         self._app_focused = True  # Track app focus state
 
+        # Recap stage currently on screen (set by _open_recap) + its period,
+        # so the deck's save/click requests resolve without the deck having to
+        # know about dialogs.
+        self._recap_stage: Optional[RecapStage] = None
+        self._recap_period = ("month", 0, None)
+        # Live photo viewer (lightbox); re-opened, never stacked.
+        self._photo_viewer: Optional[PhotoViewer] = None
+        # The surface the carousel click is currently bound to.
+        self._carousel_bound = None
+
         self._app_paths = app_paths
         self._config_path = (Path(config_path) if config_path else
                              Path(getattr(self._app_paths, "config_dir", Path.cwd())) / "config.toml")
@@ -103,6 +113,17 @@ class DashboardWindow(DashboardShell):
         # When photo is deleted from dashboard, refresh the dashboard
         self._dashboard_page.photoDeleted.connect(self._dashboard_page.refresh)
 
+        # Deleting from the CALENDAR's day detail must refresh the dashboard
+        # too - otherwise its today-card keeps showing the deleted photo
+        # (calendar already reloads its own month before emitting).
+        self._calendar_page.photoDeleted.connect(self._dashboard_page.refresh)
+
+        # Metadata edited in the calendar's day detail (note/mood) is
+        # rendered by the dashboard's carousel cards + today-card, so both
+        # surfaces need the rebuild. Distinct from photoSaved/photoDeleted:
+        # neither of those fires for an edit-in-place.
+        self._calendar_page.dataChanged.connect(self._dashboard_page.refresh)
+
         # ---- Highlights & recaps wiring (§8) ----
         self._dashboard_page.recapLaunchRequested.connect(self._open_recap)
         self._calendar_page.recapRequested.connect(
@@ -110,6 +131,13 @@ class DashboardWindow(DashboardShell):
         self._settings_page.recapLaunchRequested.connect(self._open_recap)
         self._dashboard_page.throwbackOpenRequested.connect(
             self._open_throwback_in_calendar)
+
+        # Carousel photo click -> full-size viewer (item_clicked had no
+        # consumer). The carousel is rebuilt with the whole surface on every
+        # refresh, so a one-shot connect in __init__ would die on the first
+        # rebuild; _bind_carousel re-attaches after each one.
+        self._install_carousel_hook()
+        self._bind_carousel()
 
     # ---------------------------------------------------------
     # Recap stage (§8)
