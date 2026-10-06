@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QPixmap, QImage, QPainter, QPainterPath, QFont
 
 # Core
-from core.capture import commit_capture_from_bytes
+from core.capture import commit_capture_from_bytes, evaluate_capture_quality
 from core.index_api import get_api
 from core.logging import get_logger
 from core.config import ensure_config, apply_config_to_paths, write_config
@@ -30,6 +30,22 @@ from gui.widgets.error_popup import ErrorToast
 # Theme 
 from gui.theme.theme_vars import theme_vars
 
+
+def _quality_advisory_dialog_cls():
+    """
+    Resolve the shared advisory dialog lazily.
+
+    QualityAdvisoryDialog currently lives in gui/dashboard/pages/selfie.py
+    (the in-dashboard capture page). Importing it here keeps one dialog
+    implementation for both capture paths, but the dependency direction is
+    inverted: gui/startup is the lower layer. It belongs in gui/widgets/
+    alongside error_popup.py; until then this lazy import keeps the popup's
+    startup cost unchanged. If the import ever fails the save still proceeds
+    with metrics attached — the gate is advisory, so degrading to "no
+    dialog" is safe.
+    """
+    from gui.dashboard.pages.selfie import QualityAdvisoryDialog
+    return QualityAdvisoryDialog
 
 
 class StartupWindow(BaseFramelessWindow):
@@ -557,9 +573,33 @@ class StartupWindow(BaseFramelessWindow):
         byte_array = QByteArray()
         buffer = QBuffer(byte_array)
         buffer.open(QIODevice.WriteOnly)
+        # Fallback mirrors DEFAULT_CONFIG["behavior"]["quality"]; core/config.py
+        # validates and persists the real value.
         quality = self.config.get("behavior", {}).get("quality", 90)
         self._current_qimage.save(buffer, "JPG", quality)
         jpg_data = byte_array.data()
+
+        # Advisory quality gate: score the encoded frame before committing.
+        # evaluate_capture_quality() is the same pure helper the in-dashboard
+        # capture page uses, so both paths persist identical metrics. Analysis
+        # failures skip the gate (logged, never block the save). The assessment
+        # doubles as the persisted quality metrics — never score twice.
+        gate_enabled = self.config.get("behavior", {}).get("quality_gate_enabled", True)
+        decision = evaluate_capture_quality(
+            bytes(jpg_data), gate_enabled=gate_enabled, logger=get_logger("gui.startup")
+        )
+        quality_metrics = decision.metrics  # unassessable frame -> persist NULLs
+
+        if decision.should_warn:
+            try:
+                dlg = _quality_advisory_dialog_cls()(list(decision.warnings), self.window())
+            except Exception as e:
+                # Advisory only: never block a save because the dialog is
+                # unavailable. The metrics above are still persisted.
+                get_logger("gui.startup").info("Quality advisory unavailable: %s", e)
+            else:
+                if not dlg.exec():
+                    return  # Retake chosen: stay in review, commit nothing
 
         selected_mood = None
         if self.mood_group.checkedButton():
@@ -580,7 +620,9 @@ class StartupWindow(BaseFramelessWindow):
             height=self._current_qimage.height(),
             mood=selected_mood,
             notes=selected_note,
-            allow_retake=effective_allow_retake
+            allow_retake=effective_allow_retake,
+            quality_metrics=quality_metrics,
+            one_photo_per_day=beh.get("one_photo_per_day", True),
         )
 
         if result["success"]:
