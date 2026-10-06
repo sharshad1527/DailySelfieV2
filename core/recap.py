@@ -11,6 +11,15 @@ Pure, Qt-free layer over the index API:
 
 All day bucketing goes through core.timeutils; malformed input is skipped,
 never raised (streak.py precedent).
+
+Two grades of result, deliberately kept separate because they have different
+consumers and different contracts:
+- recap-stage cards (compute_highlights / build_recap_stats): every card a
+  recap shows, score-descending, no stable id.
+- dashboard chips (compute_chip_candidates): at most three dismissible
+  pills, each with a STABLE id persisted in behavior.dismissed_highlights.
+  That id format is frozen (see DISMISS_* below) — changing it silently
+  un-dismisses every chip existing users already dismissed.
 """
 from __future__ import annotations
 
@@ -27,8 +36,10 @@ from core.timeutils import local_date_str, today_local_str
 logger = get_logger("recap")
 
 # Milestone ladder for active streaks; a card fires only for the highest
-# rung reached so long streaks don't re-fire smaller badges.
-STREAK_MILESTONES: Tuple[int, ...] = (7, 30, 100)
+# rung reached so long streaks don't re-fire smaller badges. Single source for
+# the recap stage (streak_milestones) and the dashboard chip strip
+# (compute_chip_candidates) — these ladders used to disagree on the top rung.
+MILESTONE_RUNGS: Tuple[int, ...] = (7, 30, 100, 365)
 
 # Composite best-shot scoring references (quality.py calibration):
 # blur scores land in the thousands for sharp frames; brightness is a
@@ -62,6 +73,36 @@ class Highlight:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class ChipCandidate:
+    """One dashboard highlight chip, ready to become a HighlightChip.
+
+    `dismiss_id` is the persistence key written to
+    behavior.dismissed_highlights; `kind` is what chipActivated() carries.
+    Both are frozen strings — see DISMISS_* below.
+    """
+    kind: str
+    dismiss_id: str
+    label: str
+    reason: str
+    score: float
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ActivitySummary:
+    """Raw numbers behind the activity card (no copy, so callers that only
+    need the figures — build_recap_stats — don't parse the card's text)."""
+    active_days: int
+    first: date_cls
+    last: date_cls
+    span_days: int
+    longest_gap_days: int
+    consistency_pct: float
+
+
 # ---------------------------------------------------------------
 # Small pure helpers
 # ---------------------------------------------------------------
@@ -92,11 +133,27 @@ def _year_bounds(year: int) -> Tuple[str, str]:
     return f"{year:04d}-01-01", f"{year:04d}-12-31"
 
 
+def modal_hour(hours: Sequence[int]) -> Optional[int]:
+    """Most frequent LOCAL hour, earliest on ties. None when there is no
+    usable int.
+
+    Deliberately ungated: the gate belongs to the caller. compute_highlights'
+    favorite_hour shows the peak even for a handful of scattered captures,
+    while the time_pattern card additionally demands sample size and
+    consistency.
+    """
+    vals = [h for h in (hours or []) if isinstance(h, int)]
+    if not vals:
+        return None
+    counts: Counter = Counter(vals)
+    return min(k for k, c in counts.items() if c == max(counts.values()))
+
+
 # ---------------------------------------------------------------
 # Computers (pure functions -> List[Highlight])
 # ---------------------------------------------------------------
 def streak_milestones(dates: Sequence[str], today=None) -> List[Highlight]:
-    """Active-streak milestone cards (7/30/100) plus a new-record badge.
+    """Active-streak milestone cards (see MILESTONE_RUNGS) plus a new-record badge.
 
     No-refire: only the highest reached rung emits a card, and at most one
     record badge per computation (this function is stateless) while the
@@ -110,7 +167,7 @@ def streak_milestones(dates: Sequence[str], today=None) -> List[Highlight]:
     out: List[Highlight] = []
     if current <= 0:
         return out
-    reached = [m for m in STREAK_MILESTONES if current >= m]
+    reached = [m for m in MILESTONE_RUNGS if current >= m]
     if reached:
         m = max(reached)
         out.append(Highlight(
@@ -268,45 +325,59 @@ def time_of_day_patterns(hours: Sequence[int]) -> List[Highlight]:
     n = len(vals)
     if n < TIME_PATTERN_MIN_SAMPLES:
         return []
-    counts: Counter = Counter(vals)
-    modal_hour = min(k for k, c in counts.items() if c == max(counts.values()))
-    consistency = counts[modal_hour] / n
+    peak = modal_hour(vals)
+    if peak is None:
+        return []
+    consistency = Counter(vals)[peak] / n
     if consistency < TIME_PATTERN_MIN_CONSISTENCY:
         return []
     pct = int(round(consistency * 100))
     return [Highlight(
         kind="time_pattern",
-        title=f"Usually around {modal_hour:02d}:00",
+        title=f"Usually around {peak:02d}:00",
         subtitle=f"{n} captures analyzed",
         value=f"{pct}% of captures",
         score=round(consistency, 3),
     )]
 
 
-def activity_recaps(dates: Sequence[str], today=None) -> List[Highlight]:
-    """One activity card: total days, largest interior gap, consistency %.
+def activity_summary(dates: Sequence[str], today=None) -> Optional[ActivitySummary]:
+    """Numbers behind the activity card, or None with no usable days.
 
     Span runs from the first capture through today (inclusive), so the
     consistency share decays honestly through inactive stretches.
     """
     days = sorted(d for d in (_parse_day(x) for x in (dates or [])) if d is not None)
     if not days:
-        return []
+        return None
     t = _resolve_today(today)
     first, last = days[0], days[-1]
     span_days = max((t - first).days + 1, len(days))
     gaps = [(b - a).days - 1 for a, b in zip(days, days[1:]) if b > a]
-    interior_gap = max(gaps) if gaps else 0
-    consistency_pct = round(len(days) / span_days * 100.0, 1)
+    return ActivitySummary(
+        active_days=len(days),
+        first=first,
+        last=last,
+        span_days=span_days,
+        longest_gap_days=max(gaps) if gaps else 0,
+        consistency_pct=round(len(days) / span_days * 100.0, 1),
+    )
 
-    gap_txt = f"{interior_gap}-day longest gap" if interior_gap > 0 else "No missed days"
+
+def activity_recaps(dates: Sequence[str], today=None) -> List[Highlight]:
+    """One activity card: total days, largest interior gap, consistency %."""
+    s = activity_summary(dates, today=today)
+    if s is None:
+        return []
+    gap_txt = (f"{s.longest_gap_days}-day longest gap"
+               if s.longest_gap_days > 0 else "No missed days")
     return [Highlight(
         kind="activity",
-        title=f"{len(days)} active days",
+        title=f"{s.active_days} active days",
         subtitle=gap_txt,
-        value=f"{consistency_pct}% consistent",
-        date_range=f"{first.isoformat()}..{last.isoformat()}",
-        score=round(consistency_pct / 100.0, 3),
+        value=f"{s.consistency_pct}% consistent",
+        date_range=f"{s.first.isoformat()}..{s.last.isoformat()}",
+        score=round(s.consistency_pct / 100.0, 3),
     )]
 
 
@@ -314,10 +385,34 @@ def activity_recaps(dates: Sequence[str], today=None) -> List[Highlight]:
 # Chip-grade signals (dashboard highlight strip)
 # ---------------------------------------------------------------
 CHIP_MIN_CAPTURE_DAYS = 5
-MILESTONE_RUNGS: Tuple[int, ...] = (7, 30, 100, 365)
 COMEBACK_MIN_GAP_DAYS = 7
 COMEBACK_RECENCY_DAYS = 30
 MOOD_SHIFT_MIN_SAMPLES = 7
+# mood_shift compares two 30-day windows, so the strip feeds it 60 days of
+# entries; the analyzer itself narrows that to its windows.
+CHIP_MOOD_WINDOW_DAYS = 60
+# Chip-grade gate on the record badge: a single capture is not a "record"
+# worth a chip (same reasoning as streak_record_active's min_streak).
+CHIP_MIN_RECORD_STREAK = 2
+
+# Dismissal ids, frozen: these strings already live in users' config.toml
+# under behavior.dismissed_highlights. Renaming one silently resurrects the
+# chip they closed. Kinds (what chipActivated carries) are equally stable.
+DISMISS_MILESTONE = "milestone:{rung}"      # e.g. milestone:30
+DISMISS_NEW_RECORD = "new_record"
+DISMISS_COMEBACK = "comeback"
+DISMISS_MOOD_SHIFT = "mood_shift"
+
+# Priority ladder for chips. Higher wins the cap; ties break by kind so the
+# strip's contents are deterministic across recomputes. Keys are exactly the
+# ChipCandidate.kind / DISMISS_* strings, so a chip's priority is looked up by
+# the same identifier it persists and reports.
+CHIP_SCORES: Dict[str, float] = {
+    DISMISS_NEW_RECORD: 90.0,
+    "milestone": 80.0,
+    DISMISS_COMEBACK: 60.0,
+    DISMISS_MOOD_SHIFT: 50.0,
+}
 
 
 def recap_period_id(period: Sequence[Any]) -> str:
@@ -463,6 +558,127 @@ def mood_shift(moods: Sequence[Dict[str, Any]], window_days: int = 30,
     )
 
 
+def recap_ready_period(periods: Sequence[Tuple[str, int, Optional[int]]],
+                       seen: Sequence[str] = (),
+                       dismissed: Sequence[str] = ()) -> Optional[Tuple[str, int, Optional[int]]]:
+    """Newest eligible period still worth announcing as 'ready to rewatch'.
+
+    A period stops being announced once its recap has been opened
+    (behavior.recap_seen) or its chip closed (behavior.dismissed_highlights).
+    Returns None when everything eligible is accounted for — the caller then
+    falls back to the scored chips.
+    """
+    gone = {i for i in list(seen or []) + list(dismissed or []) if isinstance(i, str)}
+    for p in periods or ():
+        pid = recap_period_id(p)
+        if pid not in gone:
+            return tuple(p)
+    return None
+
+
+def chip_candidates(dates: Sequence[str], moods: Sequence[Dict[str, Any]],
+                    today=None, dismissed: Sequence[str] = ()) -> List[ChipCandidate]:
+    """Pure chip arbitration over pre-read feed data, best-first.
+
+    Every chip here is the SAME signal the recap stage shows (milestones,
+    record, comeback, mood shift) — this only differs from compute_highlights
+    in grade: one chip per signal, a stable dismissal id, and a priority
+    ladder instead of a raw score sort. Callers cap to their slot budget.
+
+    `dismissed` is behavior.dismissed_highlights. Milestone rung selection is
+    dismissal-AWARE and descends the ladder: dismissing milestone:365 on a
+    400-day streak offers milestone:100 next, it does not silently empty the
+    strip. This mirrors what the hand-rolled strip did before it was moved
+    here; the recap stage's streak_milestones has no such notion because its
+    cards are not dismissible.
+
+    Split out from compute_chip_candidates so the arbitration (which chip
+    wins, what its persisted id is) is testable without an index.
+    """
+    t = _resolve_today(today)
+    gone = {i for i in (dismissed or ()) if isinstance(i, str)}
+    dates = list(dates or [])
+    out: List[ChipCandidate] = []
+
+    # calculate_streaks() is stricter than the rest of this module (it does not
+    # tolerate None in the list), so normalize to real ISO days ONCE up front
+    # and hand the clean list to every analyzer: a malformed feed row must
+    # degrade the chip, never raise. Matches the module contract.
+    clean = sorted(d for d in (_parse_day(x) for x in dates) if d is not None)
+    dates = [d.isoformat() for d in clean]
+    current, _best, _has_today = calculate_streaks(
+        dates, today=datetime(t.year, t.month, t.day)
+    )
+    for rung in sorted(MILESTONE_RUNGS, reverse=True):
+        if current < rung:
+            continue
+        did = DISMISS_MILESTONE.format(rung=rung)
+        if did in gone:
+            continue          # dismissed: fall through to the next rung down
+        out.append(ChipCandidate(
+            kind="milestone",
+            dismiss_id=did,
+            label=f"{rung}-day streak",
+            reason=f"Your current streak crossed the {rung}-day milestone",
+            score=CHIP_SCORES["milestone"],
+        ))
+        break                 # at most one milestone chip, as before
+
+    if DISMISS_NEW_RECORD not in gone and streak_record_active(
+            dates, today=t, min_streak=CHIP_MIN_RECORD_STREAK):
+        out.append(ChipCandidate(
+            kind=DISMISS_NEW_RECORD,
+            dismiss_id=DISMISS_NEW_RECORD,
+            label="New personal record",
+            reason=f"{current} days — your longest streak yet",
+            score=CHIP_SCORES[DISMISS_NEW_RECORD],
+        ))
+
+    cb = comeback_signal(dates, today=t)
+    if cb is not None and DISMISS_COMEBACK not in gone:
+        out.append(ChipCandidate(
+            kind=DISMISS_COMEBACK, dismiss_id=DISMISS_COMEBACK,
+            label=cb.title, reason=cb.subtitle,
+            score=CHIP_SCORES["comeback"],
+        ))
+
+    shift = mood_shift(moods, today=t)
+    if shift is not None and DISMISS_MOOD_SHIFT not in gone:
+        out.append(ChipCandidate(
+            kind=DISMISS_MOOD_SHIFT, dismiss_id=DISMISS_MOOD_SHIFT,
+            label=shift.title, reason=shift.subtitle,
+            score=CHIP_SCORES["mood_shift"],
+        ))
+
+    out.sort(key=lambda c: (-c.score, c.kind))
+    return out
+
+
+def compute_chip_candidates(api, today=None, dismissed: Sequence[str] = (),
+                            top_n: int = 3) -> List[ChipCandidate]:
+    """Dashboard highlight chips, best-first, dismissed ids filtered out.
+
+    Never raises: a missing index or mood read degrades to fewer chips rather
+    than an empty strip with an error dialog.
+    """
+    try:
+        dates = list(api.get_all_capture_dates() or [])
+    except Exception:
+        logger.debug("chip_candidates_dates_unavailable", exc_info=True)
+        return []
+    try:
+        moods = list(api.get_moods_since(CHIP_MOOD_WINDOW_DAYS) or [])
+    except Exception:
+        logger.debug("chip_candidates_moods_unavailable", exc_info=True)
+        moods = []
+
+    # chip_candidates is itself dismissal-aware (milestone rung descent), so
+    # the filter is belt-and-braces: it keeps the guarantee local even if a
+    # future chip kind is added without its own dismissal check.
+    candidates = chip_candidates(dates, moods, today=today, dismissed=dismissed)
+    return candidates[: max(0, int(top_n))]
+
+
 # ---------------------------------------------------------------
 # Aggregators
 # ---------------------------------------------------------------
@@ -566,11 +782,9 @@ def build_recap_stats(api, year: int, month: Optional[int] = None,
     # Consistency spans from each period's first capture through its last
     # day (end of month / Dec 31), capped at today.
     period_end = min(_parse_day(win_end) or today_d, today_d)
-    consistency_pct = None
-    if scoped_dates:
-        first = _parse_day(scoped_dates[0])
-        span = max((period_end - first).days + 1, len(scoped_dates))
-        consistency_pct = round(len(scoped_dates) / span * 100.0, 1)
+    activity = activity_summary(scoped_dates, today=period_end)
+    active_days = activity.active_days if activity is not None else 0
+    consistency_pct = activity.consistency_pct if activity is not None else None
 
     current, best, has_today = calculate_streaks(
         dates_all, today=datetime(today_d.year, today_d.month, today_d.day)
@@ -582,10 +796,7 @@ def build_recap_stats(api, year: int, month: Optional[int] = None,
     ).items()))
 
     hours = api.get_capture_times_between(win_start, win_end)
-    favorite_hour: Optional[int] = None
-    if hours:
-        hc = Counter(hours)
-        favorite_hour = min(k for k, c in hc.items() if c == max(hc.values()))
+    favorite_hour = modal_hour(hours)
 
     top_shots = [
         {"id": h.value, "score": h.score}
@@ -601,8 +812,16 @@ def build_recap_stats(api, year: int, month: Optional[int] = None,
         (year, month) if month else year,
         today=today_d,
     )]
-    milestone_kinds = ("streak_milestone", "streak_record")
-    milestones = [h["title"] for h in highlights if h["kind"] in milestone_kinds]
+
+    # Milestones come straight from streak_milestones, NOT from the scored
+    # list above: compute_highlights caps at top_n, so a history with enough
+    # throwback cards to overflow the cap could silently drop the streak
+    # badges the recap's streak card shows. Same cards, same order (score
+    # desc), minus the cap coupling.
+    milestones = [h.title for h in sorted(
+        streak_milestones(dates_all, today=today_d),
+        key=lambda h: (-h.score, h.kind, h.title),
+    )]
 
     dominant = _dominant_mood([{"date": m["date"], "mood": m["mood"]}
                                for m in moods if m.get("mood") is not None])
@@ -612,7 +831,7 @@ def build_recap_stats(api, year: int, month: Optional[int] = None,
         "year": int(year),
         "month": int(month) if month else None,
         "captures_total": len(rows_scoped),
-        "active_days": len(scoped_dates),
+        "active_days": active_days,
         "consistency_pct": consistency_pct,
         "streaks": {
             "current": current,
