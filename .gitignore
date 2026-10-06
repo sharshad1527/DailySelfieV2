@@ -1,10 +1,86 @@
-.venv/
+# ---------------------------------------------------------------------------
+# Environments (load-bearing: the installer creates and uses these)
+# ---------------------------------------------------------------------------
+# No trailing slash: a worktree's .venv is a symlink, and `.venv/` only matches
+# directories — which is how a symlinked venv ends up untracked-but-unignored.
+.venv
+venv/
+env/
+
+# ---------------------------------------------------------------------------
+# Runtime data (load-bearing: everything below is regenerated at runtime)
+# logs/ is where init_logger writes dailyselfie.jsonl + dailyselfie.error.jsonl
+# ---------------------------------------------------------------------------
 logs/
-.venv/
-logs/
-__pycache__/
-__pycache__
-dist
-dist/
+*.log
+
+# Local dev sandbox created by core/paths.py when DS_DEV=1 / DS_FORCE_LOCAL=1
 .ds_dev/
 .agent/
+
+# Installer scratch dirs
+_config_test/
+
+# SQLite index + append-only audit (core/index_api.py). Quarantine files
+# (index.db.corrupt-<stamp>, index.db-wal/shm) live here too.
+*.db
+*.db-wal
+*.db-shm
+*.db-corrupt-*
+captures.jsonl
+deletions.jsonl
+
+# ---------------------------------------------------------------------------
+# Test / coverage artifacts
+# ---------------------------------------------------------------------------
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# ---------------------------------------------------------------------------
+# Thumbnail cache (core/thumbs.py)
+# Cache entries: <stem>_<bucket>_<mtime_ns>.jpg under <data_dir>/thumbs
+# Generation writes <name>.<pid>.tmp next to them before an atomic os.replace.
+# Scoped to the cache dir + .tmp so tracked assets under gui/assets/ survive.
+# ---------------------------------------------------------------------------
+thumbs/
+*.tmp
+
+# ---------------------------------------------------------------------------
+# Build / packaging
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# ---------------------------------------------------------------------------
+# OS cruft
+# ---------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+desktop.ini
+
+# ---------------------------------------------------------------------------
+# Editor / IDE cruft
+# ---------------------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.ropeproject/
+.mypy_cache/
+.pytype/
