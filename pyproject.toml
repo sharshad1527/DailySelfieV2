@@ -1,0 +1,95 @@
+# DailySelfie — dev-tooling configuration.
+#
+# This project is deliberately NOT a distributable package: it installs itself
+# via `python DailySelfie.py --install`, which creates a venv and pip-installs
+# requirements.txt. That is why there is no [project] / [build-system] table
+# here — declaring either would assert packaging metadata (name, entry points,
+# and a licence) that this repo has never declared. Everything below is
+# dev-tooling config only.
+
+# ---------------------------------------------------------------------------
+# Dev toolchain (PEP 735). NOT the runtime dependency set — that is
+# requirements.txt, which the installer resolves inside the venv.
+#
+# Install with:  pip install --group dev        (pip >= 25.1)
+# ---------------------------------------------------------------------------
+[dependency-groups]
+dev = [
+    "pytest>=9.1,<10",     # 9.1.1 verified locally against this suite
+    "pytest-cov==7.1.0",   # coverage measurement
+    "pytest-qt==4.5.0",    # only needed by future GUI tests; core suite needs no Qt
+    "ruff==0.16.10",       # lint gate (see [tool.ruff] for why the rule set is narrow)
+]
+
+# ---------------------------------------------------------------------------
+# pytest
+#
+# testpaths exists so a bare `pytest` from the repo root runs the whole suite.
+# Before this file, every invocation had to name `tests/` explicitly.
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = [
+    # -ra: print the REASON for every non-passing outcome. A skip that nobody
+    # reads is how ~25 tests went missing on the Windows leg unnoticed.
+    "-ra",
+    # --strict-markers: a typo'd marker is an error, not a warning.
+    "--strict-markers",
+    # --strict-config: a malformed key/option in this file is an error.
+    "--strict-config",
+    "--tb=short",
+]
+markers = [
+    # Registered here (the source of truth for the ini file) and re-declared in
+    # tests/conftest.py via addinivalue_line; the duplicate is a no-op.
+    "core_only: fast, offline, sandboxed unit tests over the core data layer",
+]
+
+# ---------------------------------------------------------------------------
+# coverage — measured over core/ (the Qt-free business logic), not the GUI.
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+branch = true
+source = ["core"]
+# Only paths pytest would actually execute.
+omit = [
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
+# Ratchet floor. Measured 43% on linux/py3.13 with branch coverage; set to 40 so
+# the gate fails only on a real regression. Bump it when coverage moves — do NOT
+# lower it to make a red build green.
+#
+# The number is low because `source = core` counts every module, including ones
+# the suite never imports (camera, installer, uninstaller, logging, venv_helper).
+# That is deliberate: the floor measures the whole Qt-free layer, not just the
+# files that happen to have tests today.
+fail_under = 40
+
+# ---------------------------------------------------------------------------
+# ruff — lint gate.
+#
+# Deliberately narrow. The full E4/E7/F set reports ~95 findings and black would
+# reformat 62 files, all pre-existing debt in gui/ and core/ that this config
+# does not own. Rather than declare a rule set CI can never go green on, the
+# gate is the correctness-critical subset (syntax errors, bad excepts/comparisons,
+# broken unpacking) — which is green today and still catches real breakage.
+# Widening it is a follow-up that should land with the cleanup it depends on.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = [
+    "E9",    # syntax / IO errors
+    "F63",   # comparison errors
+    "F7",    # except/star-unpacking/type-annotation errors
+]
