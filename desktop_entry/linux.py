@@ -9,13 +9,14 @@ import os
 import platform
 from pathlib import Path
 
+from core.app_info import APP_VERSION
 # Aliased: enable_desktop_entry() takes a parameter named `paths` (an
 # AppPaths) which would shadow a plain `from core import paths`.
 from core import paths as core_paths
 
 
 DESKTOP_TEMPLATE = """[Desktop Entry]
-Version=1.0
+Version={app_version}
 Type=Application
 Name=Daily Selfie
 Comment=Your DailySelfie App
@@ -68,7 +69,12 @@ def enable_desktop_entry(paths) -> None:
     exec_cmd_desktop = f'sh -c \'"{python_exe}" "{app_entry}"\''
     exec_cmd_startup = f'sh -c \'"{python_exe}" "{app_entry}" --start-up --allow-retake\''
 
-    desktop_content = DESKTOP_TEMPLATE.format(exec_cmd_desktop=exec_cmd_desktop, exec_cmd_startup=exec_cmd_startup, icon_entry = icon_entry)
+    desktop_content = DESKTOP_TEMPLATE.format(
+        app_version=APP_VERSION,
+        exec_cmd_desktop=exec_cmd_desktop,
+        exec_cmd_startup=exec_cmd_startup,
+        icon_entry=icon_entry,
+    )
 
     desktop_path = _desktop_file_path(paths.app_name)
     app_path = _application_file_path(paths.app_name)

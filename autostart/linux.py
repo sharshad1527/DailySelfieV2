@@ -11,6 +11,7 @@ import os
 import platform
 from pathlib import Path
 
+from core.app_info import APP_VERSION
 # Aliased: the public functions below take a parameter named `paths`
 # (an AppPaths), which would shadow a plain `from core import paths`.
 from core import paths as core_paths
@@ -18,7 +19,7 @@ from core import paths as core_paths
 
 DESKTOP_TEMPLATE = """[Desktop Entry]
 Type=Application
-Version=1.0
+Version={app_version}
 Name=Daily Selfie
 Comment=Daily Selfie Capture App
 Exec={exec_cmd}
@@ -66,7 +67,9 @@ def enable_autostart(paths) -> None:
 
         exec_cmd = f'sh -c \'sleep 10 && "{python_exe}" "{app_entry}" --start-up\''
 
-    desktop_content = DESKTOP_TEMPLATE.format(exec_cmd=exec_cmd, icon_entry=icon_entry)
+    desktop_content = DESKTOP_TEMPLATE.format(
+        app_version=APP_VERSION, exec_cmd=exec_cmd, icon_entry=icon_entry
+    )
 
     desktop_path = _desktop_file(paths.app_name)
 
