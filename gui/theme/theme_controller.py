@@ -25,7 +25,7 @@ from gui.theme.theme_loader import (
 from gui.theme.schema import is_theme_usable, detect_modes_and_contrasts
 from gui.theme.theme_model import Theme
 
-from core.config import write_config, load_config
+from core.config import write_config_safe, load_config
 from core.logging import get_logger
 
 
@@ -122,9 +122,13 @@ class ThemeController(QObject):
         )
 
     def save(self, config_path: Path) -> None:
-        """Write updated theme settings to config.toml."""
+        """Write updated theme settings to config.toml.
+
+        Uses write_config_safe so theme persistence also works on a bare
+        interpreter without tomli-w; identical output when tomli-w is present.
+        """
         self._persist()
-        write_config(config_path, self._cfg)
+        write_config_safe(config_path, self._cfg)
 
     # -------------------------------------------------
     # Public API (Setters now emit Signal)

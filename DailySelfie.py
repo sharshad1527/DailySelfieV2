@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 os.environ["QT_LOGGING_RULES"] = "*.debug=false;qt.qpa.*=false"
 import argparse
+import platform
 import sys
 from pathlib import Path
 import traceback
@@ -23,6 +24,81 @@ from core.desktop_entry_manager import set_desktop_entry
 
 # Import the checker
 from core.capture import check_if_already_captured
+
+
+# ---------------------------------------------------------
+# Windows Store Python stub detection (Phase 3)
+# ---------------------------------------------------------
+# The Microsoft Store / "App execution alias" python.exe lives under
+# %LOCALAPPDATA%\Microsoft\WindowsApps\python.exe. It is a reparse-point
+# stub, not an interpreter: running it prints "Python was not found" or
+# silently opens the Store, so nothing the app does can work. The report
+# noted this was undetected; detect it before argparse does any real work
+# so the user gets an actionable message instead of a silent no-op.
+_WINDOWS_STUB_DIR = ("microsoft", "windowsapps")
+WINDOWS_STORE_STUB_EXIT_CODE = 2
+
+
+def _is_windows_store_stub() -> bool:
+    """
+    True if sys.executable is the Microsoft Store python.exe alias stub.
+
+    Guarded on the platform so it is a no-op on Linux/macOS and never fires
+    on a normal CPython install (a real python.exe is under
+    PythonXY\\... or %LOCALAPPDATA%\\Programs\\Python\\...).
+    """
+    if platform.system().lower() != "windows":
+        return False
+    try:
+        exe = sys.executable or ""
+        # Normalize by hand rather than via os.path.normcase/os.sep: the
+        # store path is always backslash-separated Windows form, and this
+        # check must behave identically wherever it is evaluated.
+        parts = [p for p in exe.replace("\\", "/").lower().split("/") if p]
+    except Exception:
+        return False
+    if not parts:
+        return False
+    # Require the literal .../Microsoft/WindowsApps/ directory chain, matched
+    # component-by-component so unrelated names cannot trip the guard. The
+    # final component is the executable itself, so exclude it.
+    dirs = [p for p in parts[:-1] if p]
+    n = len(_WINDOWS_STUB_DIR)
+    return any(
+        tuple(dirs[i : i + n]) == _WINDOWS_STUB_DIR for i in range(len(dirs) - n + 1)
+    )
+
+
+def _guard_against_windows_store_stub() -> None:
+    """
+    Exit non-zero with friendly instructions if running under the Store stub.
+
+    No-op on every other platform and on a genuine Python install.
+    """
+    if not _is_windows_store_stub():
+        return
+    print(
+        "\n=======================================================\n"
+        " This looks like the Microsoft Store Python shortcut.\n"
+        "=======================================================\n"
+        f"\nDetected: {sys.executable}\n"
+        "\nThat executable is only a shortcut to the Microsoft Store, not a\n"
+        "real Python interpreter, so DailySelfie cannot run or install\n"
+        "from it (it usually prints 'Python was not found' or just opens\n"
+        "the Store).\n"
+        "\nWhat to do:\n"
+        "  1. Install real Python from https://www.python.org/downloads/\n"
+        "  2. Tick 'Add python.exe to PATH' during setup.\n"
+        "  3. Open a NEW terminal (so PATH refreshes) and run:\n"
+        "         py DailySelfie.py --install\n"
+        "     (the 'py' launcher always finds a real install)\n"
+        "\nIf 'py' is also missing, reinstall Python and make sure the\n"
+        "Store alias is disabled in Settings > Apps > Advanced app\n"
+        "settings > App execution aliases.\n"
+    )
+    sys.exit(WINDOWS_STORE_STUB_EXIT_CODE)
+
+
 # ---------------------------------------------------------
 # Sub-Command Handlers
 # ---------------------------------------------------------
@@ -131,6 +207,10 @@ def main(argv=None):
     # REGISTER THE HOOK IMMEDIATELY
     from core.logging import global_exception_hook
     sys.excepthook = global_exception_hook
+
+    # Phase 3: refuse to do anything under the Microsoft Store python stub.
+    # Checked before argparse so no lifecycle command can half-run on it.
+    _guard_against_windows_store_stub()
 
     argv = argv if argv is not None else sys.argv[1:]
 
