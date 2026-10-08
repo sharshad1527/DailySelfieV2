@@ -9,6 +9,10 @@ import os
 import platform
 from pathlib import Path
 
+# Aliased: enable_desktop_entry() takes a parameter named `paths` (an
+# AppPaths) which would shadow a plain `from core import paths`.
+from core import paths as core_paths
+
 
 DESKTOP_TEMPLATE = """[Desktop Entry]
 Version=1.0
@@ -33,13 +37,15 @@ StartupNotify=true
 
 
 def _desktop_entry_dir() -> Path:
-    return Path.home() / "Desktop"
+    # sandboxed_home() keeps writes inside the sandbox under DS_* mode instead
+    # of the real ~/Desktop.
+    return core_paths.sandboxed_home() / "Desktop"
 
 def _desktop_file_path(app_name: str) -> Path:
     return _desktop_entry_dir() / f"{app_name}.desktop"
 
 def _application_dir() -> Path:
-    return Path.home() / ".local" / "share" / "applications"
+    return core_paths.sandboxed_home() / ".local" / "share" / "applications"
 
 def _application_file_path(app_name: str) -> Path:
     return _application_dir() / f"{app_name}.desktop"
@@ -66,6 +72,13 @@ def enable_desktop_entry(paths) -> None:
 
     desktop_path = _desktop_file_path(paths.app_name)
     app_path = _application_file_path(paths.app_name)
+
+    # Both target dirs must exist before writing. They normally do on a real
+    # desktop, so this was never noticed, but it made the function fail outright
+    # on any account lacking ~/Desktop (and previously it crashed the whole
+    # install wizard). Creating them is a no-op in the normal case.
+    _desktop_entry_dir().mkdir(parents=True, exist_ok=True)
+    _application_dir().mkdir(parents=True, exist_ok=True)
 
     with desktop_path.open("w", encoding="utf-8") as f:
         f.write(desktop_content)

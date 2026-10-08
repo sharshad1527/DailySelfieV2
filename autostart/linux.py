@@ -11,6 +11,10 @@ import os
 import platform
 from pathlib import Path
 
+# Aliased: the public functions below take a parameter named `paths`
+# (an AppPaths), which would shadow a plain `from core import paths`.
+from core import paths as core_paths
+
 
 DESKTOP_TEMPLATE = """[Desktop Entry]
 Type=Application
@@ -28,7 +32,9 @@ StartupNotify=true
 
 
 def _autostart_dir() -> Path:
-    return Path.home() / ".config" / "autostart"
+    # sandboxed_home() keeps writes inside the sandbox under DS_* mode instead
+    # of the real ~/.config/autostart.
+    return core_paths.sandboxed_home() / ".config" / "autostart"
 
 
 def _desktop_file(app_name: str) -> Path:
@@ -46,7 +52,7 @@ def enable_autostart(paths) -> None:
     autostart_dir.mkdir(parents=True, exist_ok=True)
 
     icon_entry = paths.project_root / "gui" / "assets" / "icons" / "app.svg"
-    wrapper_path = Path.home() / ".local" / "bin" / "dailyselfie"
+    wrapper_path = core_paths.sandboxed_home() / ".local" / "bin" / "dailyselfie"
 
     if wrapper_path.exists():
         # Small sleep so the UI loads fully after login

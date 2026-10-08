@@ -53,6 +53,42 @@ DS_ENV_KEYS: Dict[str, str] = {
 DEFAULT_SANDBOX_ROOT = "/tmp/opencode"
 _SANDBOX_ATTRS = ("config_dir", "data_dir", "logs_dir", "photos_root", "venv_dir")
 
+# Sub-path of the sandbox root that stands in for $HOME when DS_* mode is
+# active. Anything that would otherwise write under the real home directory
+# (the CLI wrapper, autostart .desktop, Desktop entry, Pictures rescue) must
+# go through sandbox_home() instead of Path.home() directly, or it escapes the
+# guard in _SANDBOX_ATTRS and touches the user's real files.
+SANDBOX_HOME_ENV = "DS_HOME"
+
+
+def sandbox_home() -> Optional[Path]:
+    """Return the stand-in $HOME when DS_* mode is active, else None.
+
+    Callers use it to redirect home-relative writes:
+
+        home = sandbox_home() or Path.home()
+
+    When DS_HOME is unset but some other DS_* override is active, the sandbox
+    root is used so a test that forgot to set DS_HOME still cannot write to the
+    real home. Returns None in normal (non-test) operation, where the real
+    home is correct.
+    """
+    override = os.environ.get(SANDBOX_HOME_ENV)
+    if override:
+        return Path(override).expanduser().resolve()
+    if ds_mode_active():
+        return Path(DEFAULT_SANDBOX_ROOT).expanduser().resolve()
+    return None
+
+
+def sandboxed_home() -> Path:
+    """$HOME, or the sandbox stand-in when DS_* mode is active.
+
+    Preferred over bare Path.home() for any path a caller may WRITE.
+    Reading real-home paths (e.g. config discovery) can keep Path.home().
+    """
+    return sandbox_home() or Path.home()
+
 
 def _truthy_env(name: str) -> bool:
     v = os.environ.get(name)

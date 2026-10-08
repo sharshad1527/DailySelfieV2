@@ -25,6 +25,7 @@ import platform
 import time
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Set
+from core import paths
 from core.autostart_manager import set_autostart
 from core.desktop_entry_manager import set_desktop_entry
 from core.logging import get_logger
@@ -56,7 +57,8 @@ def _remove_cli_wrapper(install_dir: Path):
     if os_name == "windows":
         wrapper_path = install_dir / "bin" / "dailyselfie.bat"
     else:
-        wrapper_path = Path.home() / ".local" / "bin" / "dailyselfie"
+        # Must mirror create_cli_wrapper(), which writes via sandboxed_home().
+        wrapper_path = paths.sandboxed_home() / ".local" / "bin" / "dailyselfie"
 
     if wrapper_path and wrapper_path.exists():
         try:
@@ -104,9 +106,14 @@ def _confirm(prompt: str, default: bool = False) -> bool:
 
 
 def _get_pictures_dir() -> Path:
-    """Return a cross-platform 'Pictures' directory."""
-    # Works on most Linux/Windows setups
-    return Path.home() / "Pictures"
+    """Return a cross-platform 'Pictures' directory.
+
+    sandboxed_home() so the rescue copy lands in the sandbox under DS_* mode.
+    The rescue is the one path here that COPIES (rather than deletes) real user
+    photos, so it must never read from or write to the real ~/Pictures during a
+    test run.
+    """
+    return paths.sandboxed_home() / "Pictures"
 
 
 def _is_within(child: Path, ancestor: Path) -> bool:

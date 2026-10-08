@@ -23,6 +23,7 @@ import copy
 from pathlib import Path
 import platform
 
+from core import paths
 from core.venv_helper import ensure_venv
 from core.config import DEFAULT_CONFIG, write_config_bootstrap
 from core.autostart_manager import set_autostart
@@ -47,8 +48,11 @@ def create_cli_wrapper(install_dir: Path, venv_dir: Path, project_root: Path) ->
         wrapper_name = "dailyselfie.bat"
         python_exe = venv_dir / "Scripts" / "Python.exe"
     else:
-        # Linux: Use Standard User Bin Directory
-        bin_dir = Path.home() / ".local" / "bin"
+        # Linux: Use Standard User Bin Directory.
+        # sandboxed_home() rather than Path.home(): this is a WRITE outside the
+        # five guarded app dirs, so in DS_* sandbox mode it must be redirected
+        # or it lands in the real ~/.local/bin.
+        bin_dir = paths.sandboxed_home() / ".local" / "bin"
         wrapper_name = "dailyselfie"
         python_exe = venv_dir / "bin" / "python"
 
