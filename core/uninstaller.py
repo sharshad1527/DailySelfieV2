@@ -69,26 +69,77 @@ def _remove_cli_wrapper(install_dir: Path):
 
 
 def _is_safe_to_delete(path: Path) -> bool:
-    """Return True if this path looks safe to remove."""
-    forbidden = {Path("/"), Path.home(), Path("/usr"), Path("/usr/local")}
+    """Return True if this path looks safe to remove.
+
+    Deny-list, deliberately broader than it used to be. The original guarded
+    only 4 exact paths, so `photos_root = "~/Pictures"` resolved to something
+    outside that set and step 5's `shutil.rmtree` deleted it with no check --
+    and `~/..` (i.e. $HOME's parent) passed too. Anything that is a system
+    directory, a parent of the user's home, or the home itself is refused.
+    """
     try:
         resolved = path.resolve()
+    except Exception:
+        # Unresolvable (e.g. a disconnected network mount) is not safe to delete.
+        return False
 
-        # 1. Check against hardcoded forbidden paths
-        for bad in forbidden:
-            if resolved == bad:
-                return False
+    home = Path.home().resolve()
 
-        # 2. Prevent deleting the project root itself if running from source.
-        #    This happens if the user installs into the current directory.
-        #    We define "project root" as the parent of this file's folder (core/).
-        project_root = Path(__file__).resolve().parent.parent
-        if resolved == project_root:
-            logger.warning(f"Safety Check: Cannot delete project root ({resolved})")
+    # 1. Exact denials: root, the user's home, and the source tree.
+    project_root = Path(__file__).resolve().parent.parent
+    if resolved in (Path("/"), home, project_root):
+        logger.warning(f"Safety Check: refusing to delete {resolved}")
+        return False
+
+    # 2. Never delete a directory that CONTAINS the user's home, or that the
+    #    app's own data lives inside. This is the case that let `rmtree($HOME/..)`
+    #    through: $HOME's parent is a perfectly ordinary directory, but wiping
+    #    it destroys everything the user has. The second half covers typos like
+    #    photos_root = "~/.local/share" -- the parent of the app's data root.
+    try:
+        if resolved in home.parents or resolved == home.parent:
+            logger.warning(
+                f"Safety Check: refusing to delete {resolved} (it contains $HOME)"
+            )
             return False
-
+        # Refuse the *parents* the app's own state lives in, but NOT the app's
+        # own directories -- uninstall has to be able to remove those. So
+        # ~/.local/share is refused while ~/.local/share/DailySelfie is fine.
+        app_dirs = {
+            home / ".local" / "share" / "DailySelfie",
+            home / ".config" / "DailySelfie",
+            home / "Pictures" / "DailySelfie",
+        }
+        for anchor in (home / ".local", home / ".config", home / ".cache"):
+            if not _is_within(resolved, anchor):
+                continue
+            if any(resolved == d or _is_within(resolved, d) for d in app_dirs):
+                continue  # inside the app's own tree -> allowed
+            logger.warning(
+                f"Safety Check: refusing to delete {resolved} "
+                f"(it holds app state under {anchor})"
+            )
+            return False
     except Exception:
         return False
+
+    # 3. System trees. Matched on the first path component so /usr, /etc,
+    #    /var, /bin ... and their descendants are all covered.
+    system_roots = {
+        "/usr", "/etc", "/var", "/bin", "/sbin", "/lib", "/lib64", "/opt",
+        "/boot", "/dev", "/proc", "/sys", "/root", "/home", "/srv", "/run",
+    }
+    try:
+        rel = resolved.relative_to(Path(resolved.anchor))
+        if rel.parts and f"/{rel.parts[0]}" in system_roots:
+            logger.warning(f"Safety Check: refusing to delete system path {resolved}")
+            return False
+    except Exception:
+        pass
+
+    # 4. Refuse anything that only *looks* safe because it is a link into one
+    #    of the above. resolve() has already followed the link, so the checks
+    #    above apply to the real target.
     return True
 
 
@@ -483,12 +534,36 @@ def run_uninstall(paths, cfg: Dict[str, Any]):
     # 5. Cleanup External Photos (Edge Case)
     # ---------------------------------------------------------
     # If photos_root was OUTSIDE install_dir and user wanted to delete them:
+    #
+    # This used to be a bare shutil.rmtree with NO safety check -- only
+    # install_dir was validated. A config with photos_root pointing somewhere
+    # broad (e.g. "~/Pictures", which the app's own rescue README tells users
+    # to hand-edit) meant a single "y" wiped an unrelated photo library, and in
+    # the ~/Pictures case it also destroyed the rescue folder this same run had
+    # just created a few lines earlier.
     if delete_photos and photos_root.exists():
-        try:
-            shutil.rmtree(photos_root)
-            logger.info(f"Removed photos directory: {photos_root}")
-        except Exception as e:
-            logger.warning(f"Failed to remove photos: {e}")
+        refuse = None
+        if not _is_safe_to_delete(photos_root):
+            refuse = "it is a system or home directory"
+        elif rescue_root is not None and _is_within(rescue_root, photos_root):
+            refuse = "the rescue folder from this run lives inside it"
+        elif _is_within(photos_root, rescue_root) if rescue_root is not None else False:
+            refuse = "it contains the rescue folder from this run"
+
+        if refuse:
+            logger.error(
+                f"Refusing to delete photos at {photos_root}: {refuse}. "
+                "Your photos have been left untouched -- remove them by hand if "
+                "you are sure."
+            )
+        else:
+            n = _count_files(photos_root)
+            logger.info(f"Permanently deleting {n} file(s) from {photos_root}")
+            try:
+                shutil.rmtree(photos_root)
+                logger.info(f"Removed photos directory: {photos_root}")
+            except Exception as e:
+                logger.warning(f"Failed to remove photos: {e}")
 
     # ---------------------------------------------------------
     # 6. Final Summary

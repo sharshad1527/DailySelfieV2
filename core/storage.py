@@ -45,7 +45,13 @@ def year_month_folder(root: Path, ts: datetime) -> Path:
 
 
 def make_date_time_filename(ts: datetime) -> str:
-    """Generate filename: YYYY-MM-DD_HHMMSS.jpg (24-hour time, no random suffix)."""
+    """Generate filename: YYYY-MM-DD_HHMMSS.jpg (24-hour time, no random suffix).
+
+    Second granularity means two captures in the same second produce the SAME
+    name, and atomic_write() replaces unconditionally. Callers must therefore
+    resolve collisions via `unique_save_path()` before writing -- see the
+    note there. Kept as-is so existing filenames stay stable and indexable.
+    """
     datepart = ts.strftime("%Y-%m-%d")
     timepart = ts.strftime("%H%M%S")
     return f"{datepart}_{timepart}.jpg"
@@ -54,10 +60,39 @@ def make_date_time_filename(ts: datetime) -> str:
 # -------------------------------------------------------------
 # Atomic write
 # -------------------------------------------------------------
+def unique_save_path(dest_folder: Path, filename: str) -> Path:
+    """Resolve `filename` to a path that does not already exist.
+
+    Photo filenames have one-second resolution, so a retake, a double-click, or
+    two capture processes starting together can produce the same name. Combined
+    with atomic_write()'s unconditional replace() that silently destroyed the
+    earlier photo while BOTH callers reported success. This picks a free name
+    instead, appending -2, -3, ... before the extension.
+
+    The caller must pass the result back to atomic_write() as an explicit
+    filename; nothing re-derives the name downstream, so the two stay in sync.
+    """
+    candidate = dest_folder / filename
+    if not candidate.exists():
+        return candidate
+    stem = candidate.stem
+    suffix = candidate.suffix
+    n = 2
+    while True:
+        alt = dest_folder / f"{stem}-{n}{suffix}"
+        if not alt.exists():
+            return alt
+        n += 1
+
+
 def atomic_write(dest_folder: Path, filename: str, data: bytes) -> Path:
     """Write bytes atomically by writing into a temporary file in the same directory.
 
     Returns the final path.
+
+    NOTE: `filename` is used verbatim and an existing file is REPLACED. Callers
+    writing user photos must pass a name from unique_save_path() so a same-second
+    collision cannot destroy the earlier capture.
     """
     dest_folder.mkdir(parents=True, exist_ok=True)
     final_path = dest_folder / filename
@@ -196,11 +231,17 @@ def save_image_bytes(root: Path, ts: datetime, data: bytes) -> SaveResult:
 
     Saves into root/YYYY/MM/ with filename YYYY-MM-DD_HHMMSS.jpg
     Returns SaveResult(success, path, error).
+
+    Collisions are resolved, never overwritten: filenames have one-second
+    resolution, so two captures in the same second (retake, double-click, or two
+    capture processes) used to target the same path and the second
+    atomic_write() destroyed the first photo while both reported success.
     """
     try:
         folder = year_month_folder(root, ts)
         filename = make_date_time_filename(ts)
-        saved = atomic_write(folder, filename, data)
+        target = unique_save_path(folder, filename)
+        saved = atomic_write(folder, target.name, data)
         return SaveResult(True, saved, None)
     except Exception as e:
         return SaveResult(False, None, str(e))
