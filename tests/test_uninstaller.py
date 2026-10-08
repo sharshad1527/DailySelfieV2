@@ -48,9 +48,17 @@ pytestmark = pytest.mark.core_only  # fast/offline core data-layer tests
 # -------------------------------------------------------------
 @pytest.fixture()
 def fake_home(tmp_path, monkeypatch):
-    """Redirect Path.home() into the pytest tmp tree."""
+    """Redirect $HOME into the pytest tmp tree.
+
+    Sets DS_HOME (and patches Path.home) so BOTH resolution paths are covered:
+    core.paths.sandboxed_home() reads DS_HOME first, and any code still calling
+    Path.home() directly gets the tmp dir too. Patching Path.home alone is not
+    enough -- sandboxed_home() short-circuits on DS_* mode and never consults
+    Path.home(), so the rescue root would otherwise land in the real home.
+    """
     home = tmp_path / "home"
     home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("DS_HOME", str(home))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     return home
 

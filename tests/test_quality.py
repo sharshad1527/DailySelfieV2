@@ -22,6 +22,7 @@ from core.quality import (
     WARNING_MESSAGES,
     assess_image_quality,
 )
+from core import quality as quality_mod
 
 pytestmark = pytest.mark.core_only  # fast/offline core data-layer tests
 
@@ -204,13 +205,30 @@ class TestDegradedInput:
         assert result == {"blur_score": None, "brightness": None, "warnings": []}
 
     def test_no_gui_imports_are_pulled_in(self):
-        """quality.py must stay headless: no Qt anywhere in the chain."""
-        import sys
+        """quality.py must stay headless: importing it pulls in no Qt.
 
+        Asserted by inspecting quality.py's OWN import graph rather than
+        sys.modules. A whole-process check is order-dependent: any earlier test
+        that legitimately imports PySide6 (the GUI-adjacent suites do) would
+        fail this one even though quality.py itself is clean.
+        """
+        import ast
+        import pathlib
+
+        src = pathlib.Path(quality_mod.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update(a.name.split(".")[0] for a in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                imported.add(node.module.split(".")[0])
+
+        assert "PySide6" not in imported, f"quality.py imports Qt: {sorted(imported)}"
+        assert "PyQt5" not in imported and "PyQt6" not in imported
+
+        # And it must still work: scoring a frame must not need Qt either.
         assess_image_quality(_encode(_sharp_frame()))
-        assert not any(
-            name.startswith("PySide") for name in sys.modules
-        ), "quality assessment must not import Qt"
 
 
 class TestFrameSizeHandling:
