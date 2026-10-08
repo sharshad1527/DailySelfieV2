@@ -139,6 +139,9 @@ class SelfiePage(QWidget):
         self.shutter_bar.retakeClicked.connect(self._on_retake)
         
         self.shutter_bar.hoverStatus.connect(self._update_toast)
+        # Persist the countdown as soon as it changes: SelfiePage never receives
+        # closeEvent, so waiting until shutdown loses the setting entirely.
+        self.shutter_bar.timerChanged.connect(self._persist_timer_duration)
         self.ghost_slider.hoverStatus.connect(self._update_toast)
         self.ghost_slider.valueChanged.connect(self._on_ghost_opacity_change)
 
@@ -587,14 +590,31 @@ class SelfiePage(QWidget):
         self._stop_preview()
         super().hideEvent(event)
 
-    def closeEvent(self, event):
+    def _persist_timer_duration(self) -> None:
+        """Write the ShutterBar's timer choice back to config.
+
+        This used to live in closeEvent(), but SelfiePage is a plain QWidget in
+        a QStackedWidget, so Qt never delivers a close event to it — quitting the
+        dashboard silently discarded the user's timer setting. Persisting on
+        change is both reliable and cheaper (one write per actual change, not one
+        per exit).
+
+        Failures are logged, never raised: a photo must still save if the config
+        write does not.
+        """
         try:
-            current_timer = self.shutter_bar.get_timer_value()
-            if self.config["behavior"].get("timer_duration") != current_timer:
-                self.config["behavior"]["timer_duration"] = current_timer
-                write_config(self.config_path, self.config)
-        except Exception:
-            pass
+            current = self.shutter_bar.get_timer_value()
+            if self.config["behavior"].get("timer_duration") == current:
+                return
+            self.config["behavior"]["timer_duration"] = current
+            write_config(self.config_path, self.config)
+        except Exception as e:
+            get_logger("gui.selfie").warning("Could not persist timer_duration: %s", e)
+
+    def closeEvent(self, event):
+        # Still called for the popup-style/standalone case; harmless when it is
+        # not delivered, since _persist_timer_duration() already ran on change.
+        self._persist_timer_duration()
         self._stop_preview()
         if self.index_api:
             self.index_api.close()
@@ -783,7 +803,11 @@ class SelfiePage(QWidget):
                 "width": self._current_qimage.width(),
                 "height": self._current_qimage.height(),
                 "path": result.get("path"),
-                "ts": result.get("ts"),  # Capture timestamp if available
+                # commit_capture_from_bytes returns "timestamp", not "ts" —
+                # reading the wrong key left this permanently None on a fresh
+                # capture while the reload path (:538) reads the DB's "ts".
+                # Both producers fill one dict, so the keys must agree.
+                "ts": result.get("timestamp") or result.get("ts"),
             }
             self._set_photo_taken_state()
             # Emit signal for dashboard refresh

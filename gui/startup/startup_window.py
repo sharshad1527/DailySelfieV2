@@ -549,6 +549,19 @@ class StartupWindow(BaseFramelessWindow):
         if self._raw_ghost_image:
             self.ghost_lbl.show()
             self._update_ghost_visuals()
+        # Discarding the shot must also discard what the user typed about it,
+        # otherwise the mood/note are committed against the *next* capture --
+        # a different photo, possibly taken minutes later. The in-dashboard
+        # SelfiePage already did this; the popup had drifted.
+        try:
+            checked_btn = self.mood_group.checkedButton()
+            if checked_btn:
+                self.mood_group.setExclusive(False)
+                checked_btn.setChecked(False)
+                self.mood_group.setExclusive(True)
+            self.note_edit.clear()
+        except Exception as e:
+            get_logger("gui.startup").warning("Could not clear mood/note on retake: %s", e)
         self._current_qimage = None
         self._start_preview()
 

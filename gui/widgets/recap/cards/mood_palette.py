@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen, QMovie
+from PySide6.QtGui import (
+    QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QMovie,
+)
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QVBoxLayout, QWidget,
 )

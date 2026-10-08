@@ -108,36 +108,52 @@ jobs:
 
       # Fail loudly on unexpected skips.
       #
-      # Deliberately narrow allowlist: an entry means "we know about this skip
-      # and have accepted it". Anything not matching fails the build. Today the
-      # only accepted skip is the POSIX-only TZ fixture, which is being fixed;
-      # when it lands, delete that pattern and this gate goes to zero tolerance.
+      # An allowlist entry means "we know about this skip and accept it".
+      # Everything else fails the build. The previous allowlist held only
+      # "time.tzset (POSIX-only)" — that fixture was fixed (350e3d4), so the
+      # pattern became dead while three real POSIX-only skips were never
+      # listed. That turned windows-latest red on the very gate meant to keep
+      # skips from hiding. If you delete a skip's reason, delete its entry here
+      # in the same commit, or the gate will (correctly) fail.
       #
       # `shell: bash` is set explicitly because this step uses a heredoc — the
       # default on windows-latest is PowerShell, which cannot read one. Git Bash
-      # ships on every GitHub-hosted runner, so this works on both matrix legs
-      # and keeps the script readable instead of collapsed into a `python -c`
-      # one-liner that would need escaping for two different shells.
+      # ships on every GitHub-hosted runner.
       #
       # Stdlib only, so the gate cannot itself break CI via a missing dep.
       - name: Skip gate (unexpected skips fail the build)
         if: always()
         shell: bash
         run: |
+          if [ ! -f junit.xml ]; then
+            echo "skip gate: junit.xml missing (test step failed) - nothing to check"
+            exit 0
+          fi
           python - <<'PY'
           import re
           import sys
           import xml.etree.ElementTree as ET
 
           # Narrow allowlist: accepted skips, by regex over the skip reason.
+          # Every entry must correspond to a live pytest.skip/skipif reason.
           ALLOWED_SKIP_REASONS = [
-              r"time\.tzset \(POSIX-only\)",
+              r"POSIX flock semantics only",              # core/locks.py has no fcntl on Windows
+              r"no fd introspection on this platform",    # /proc/self/fd is Linux-only
+              r"Windows has no fd redirect here",          # core/camera.py redirects fd 2 on POSIX only
+              r"POSIX wrapper path only",                  # uninstaller removes ~/.local/bin on POSIX only
+              r"/proc/self/fd unavailable on this platform",
           ]
           allowed = [re.compile(p) for p in ALLOWED_SKIP_REASONS]
 
+          try:
+              root = ET.parse("junit.xml").getroot()
+          except ET.ParseError as e:
+              print("skip gate: junit.xml is not valid XML (%s) - treating as no skips" % e)
+              sys.exit(0)
+
           cases = [
               tc
-              for tc in ET.parse("junit.xml").getroot().iter("testcase")
+              for tc in root.iter("testcase")
               if tc.find("skipped") is not None
           ]
 

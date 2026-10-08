@@ -10,7 +10,7 @@ import math
 import time as _time
 from datetime import date as date_cls, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from PySide6.QtCore import (
     Property,
