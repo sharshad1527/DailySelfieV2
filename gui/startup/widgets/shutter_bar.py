@@ -1,16 +1,26 @@
 # gui/startup/widgets/shutter_bar.py
 
-from PySide6.QtCore import Qt, QRect, QSize, Signal, QEvent
+from PySide6.QtCore import (
+    Qt, QRect, QSize, Signal, QEvent, QTimer, QVariantAnimation,
+)
 from PySide6.QtWidgets import QWidget, QPushButton, QHBoxLayout
 from PySide6.QtGui import QPainter, QIcon, QFont, QPixmap, QColor
 from pathlib import Path
 
 # Assuming theme_vars is available as in your snippet
+from gui.theme import motion_tokens as mt
 from gui.theme.theme_vars import theme_vars
 
 CURRENT_DIR = Path(__file__).resolve().parent
 # Adjust path if necessary based on your actual project structure
 ICONS_DIR = CURRENT_DIR.parent.parent.parent / "gui" / "assets" / "icons"
+
+# Screen-flash preview: a brief white bloom over the bar when "Screen Flash"
+# is switched on, so the toggle has visible feedback without the owner
+# window having to cooperate (it may already run its own capture flash).
+FLASH_ALPHA = 0.85
+FLASH_DWELL_MS = 45      # held at full brightness
+FLASH_FADE_MS = 110      # then faded out (total ~155ms)
 
 
 class ShutterBar(QWidget):
@@ -33,6 +43,13 @@ class ShutterBar(QWidget):
         self._shutter_pressed = False
         self._timer_value = initial_timer
         self._timer_options = [0, 2, 3, 5]
+
+        # ---- Screen-flash preview overlay (self-contained) ----
+        # A translucent white child of the bar itself: no parent-window
+        # cooperation, and it never outlives the bar.
+        self._flash_alpha = 0.0
+        self._flash_anim = None
+        self._flash_hold = None
 
         # --------------------------------------------------
         # Capture buttons
@@ -188,6 +205,9 @@ class ShutterBar(QWidget):
 
     def paintEvent(self, event):
         if self.is_review:
+            p = QPainter(self)
+            self._paint_flash(p)
+            p.end()
             return
 
         v = theme_vars()
@@ -271,6 +291,25 @@ class ShutterBar(QWidget):
                 20,
             )
             self._timer_icon.paint(p, icon_rect, Qt.AlignCenter)
+
+        # Screen-flash bloom sits on top of every control (p still active).
+        self._paint_flash(p)
+        p.end()
+
+    def _paint_flash(self, p: QPainter) -> None:
+        """White bloom over the whole bar while the flash preview runs.
+
+        White is intentional (a real screen flash is white) and is not a
+        theme token - the theme only supplies the alpha ramp via the
+        animation, so no hardcoded theme colour is introduced here.
+        """
+        if self._flash_alpha <= 0.0:
+            return
+        p.save()
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(255, 255, 255, int(255 * self._flash_alpha)))
+        p.drawRoundedRect(self.rect(), 40, 40)
+        p.restore()
 
     def _paint_state_layer(self, painter: QPainter, widget: QWidget, rect: QRect, radius: int, base_color_token: str = "on_surface"):
         """
@@ -379,6 +418,27 @@ class ShutterBar(QWidget):
         self.review_container.setVisible(review)
         self.update()
 
+    def set_timer_value(self, seconds):
+        """Set the countdown selection programmatically.
+
+        Clamped to the option list (nearest valid value) so the painted
+        "{n}s" chip and get_timer_value() can never disagree, and emits
+        timerChanged so a host that listens stays in sync with hosts that
+        poll. This is the programmatic twin of the timer button.
+        """
+        try:
+            wanted = int(seconds)
+        except (TypeError, ValueError):
+            return
+        options = self._timer_options
+        if wanted not in options:
+            wanted = min(options, key=lambda o: abs(o - wanted))
+        if wanted == self._timer_value:
+            return
+        self._timer_value = wanted
+        self.timerChanged.emit(self._timer_value)
+        self.update()
+
     def _toggle_timer(self):
         i = self._timer_options.index(self._timer_value)
         self._timer_value = self._timer_options[(i + 1) % len(self._timer_options)]
@@ -402,10 +462,90 @@ class ShutterBar(QWidget):
     def _on_light_clicked(self):
         # Update icon color (Active vs Inactive)
         self._apply_icon_theme()
-        
+
         # Emit signal
-        self.lightToggled.emit(self.light_btn.isChecked())
+        enabled = self.light_btn.isChecked()
+        self.lightToggled.emit(enabled)
+
+        # Screen-flash preview: bloom the bar so switching the toggle ON is
+        # visibly doing something even where nothing consumes lightToggled.
+        if enabled:
+            self.flash_preview()
         self.update()
+
+    # --------------------------------------------------
+    # Screen flash (self-contained widget behaviour)
+    # --------------------------------------------------
+
+    def flash_preview(self, dwell_ms=FLASH_DWELL_MS,
+                       fade_ms=FLASH_FADE_MS, alpha=FLASH_ALPHA):
+        """Brief white bloom over the bar; gated on behavior.motion_enabled.
+
+        Painted in this widget's own paintEvent (no overlay child, no
+        QGraphicsOpacityEffect), so it can never nest inside a parent's
+        effect grab. Returns immediately when motion is disabled.
+        """
+        if not mt.is_motion_enabled():
+            return
+        try:
+            self._kill_flash()
+            peak = max(0.0, min(1.0, float(alpha)))
+            self._flash_alpha = peak
+            self.update()
+            dwell = max(0, int(dwell_ms))
+            fade = max(1, int(fade_ms))
+            # Hold at full brightness, then ramp out (two steps: QVariantAnimation
+            # can't express a hold here — PySide6 doesn't expose the KeyValue
+            # sequence type setKeyValues needs, and setCurrentTime before
+            # start() is discarded).
+            if dwell <= 0:
+                self._start_flash_fade(peak, fade)
+                return
+            self._flash_hold = QTimer(self)
+            self._flash_hold.setSingleShot(True)
+            self._flash_hold.timeout.connect(
+                lambda: self._start_flash_fade(peak, fade))
+            self._flash_hold.start(dwell)
+        except RuntimeError:
+            self._flash_alpha = 0.0
+            self._flash_anim = None
+            self._flash_hold = None
+
+    def _start_flash_fade(self, peak: float, fade_ms: int) -> None:
+        self._flash_hold = None
+        if self._flash_anim is None:
+            self._flash_anim = QVariantAnimation(self)
+            self._flash_anim.setStartValue(float(peak))
+            self._flash_anim.setEndValue(0.0)
+            self._flash_anim.setDuration(int(fade_ms))
+            self._flash_anim.setEasingCurve(mt.curve_exit)
+            self._flash_anim.valueChanged.connect(self._on_flash_value)
+            self._flash_anim.finished.connect(self._on_flash_finished)
+        self._flash_anim.start()
+
+    def _kill_flash(self) -> None:
+        if self._flash_hold is not None:
+            self._flash_hold.stop()
+            self._flash_hold.deleteLater()
+            self._flash_hold = None
+        if self._flash_anim is not None:
+            self._flash_anim.stop()
+            self._flash_anim.deleteLater()
+            self._flash_anim = None
+
+    def _on_flash_value(self, value) -> None:
+        self._flash_alpha = max(0.0, min(1.0, float(value)))
+        self.update()
+
+    def _on_flash_finished(self) -> None:
+        self._flash_alpha = 0.0
+        if self._flash_anim is not None:
+            self._flash_anim.deleteLater()
+            self._flash_anim = None
+        self.update()
+
+    def is_flashing(self) -> bool:
+        return self._flash_alpha > 0.0
 
     def _on_theme_changed(self):
         """Called when the ThemeController switches modes/contrasts."""
