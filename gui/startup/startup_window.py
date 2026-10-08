@@ -26,26 +26,10 @@ from gui.startup.widgets.gif_button import GifButton
 from gui.startup.camera.preview import CameraPreviewThread
 from gui.qt_logging import QtSignalingHandler, install_qt_logger
 from gui.widgets.error_popup import ErrorToast
+from gui.widgets.quality_advisory import QualityAdvisoryDialog
 
 # Theme 
 from gui.theme.theme_vars import theme_vars
-
-
-def _quality_advisory_dialog_cls():
-    """
-    Resolve the shared advisory dialog lazily.
-
-    QualityAdvisoryDialog currently lives in gui/dashboard/pages/selfie.py
-    (the in-dashboard capture page). Importing it here keeps one dialog
-    implementation for both capture paths, but the dependency direction is
-    inverted: gui/startup is the lower layer. It belongs in gui/widgets/
-    alongside error_popup.py; until then this lazy import keeps the popup's
-    startup cost unchanged. If the import ever fails the save still proceeds
-    with metrics attached — the gate is advisory, so degrading to "no
-    dialog" is safe.
-    """
-    from gui.dashboard.pages.selfie import QualityAdvisoryDialog
-    return QualityAdvisoryDialog
 
 
 class StartupWindow(BaseFramelessWindow):
@@ -592,7 +576,7 @@ class StartupWindow(BaseFramelessWindow):
 
         if decision.should_warn:
             try:
-                dlg = _quality_advisory_dialog_cls()(list(decision.warnings), self.window())
+                dlg = QualityAdvisoryDialog(list(decision.warnings), self.window())
             except Exception as e:
                 # Advisory only: never block a save because the dialog is
                 # unavailable. The metrics above are still persisted.

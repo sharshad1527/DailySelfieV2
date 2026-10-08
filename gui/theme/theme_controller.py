@@ -147,17 +147,27 @@ class ThemeController(QObject):
         return self._theme.available_contrasts(self._mode)
 
     def set_theme(self, name: str) -> None:
-        """Switch to a different JSON theme file."""
+        """Switch to a different JSON theme file.
+
+        On a bad theme name this logs and returns without changing anything —
+        previously it swallowed ThemeLoaderError silently, so a typo looked
+        like the app ignoring you. Callers that need to surface the failure to
+        the user check `theme_name` after the call (see settings-page.md
+        "Backend asks" #3) because no exception is raised.
+        """
         if name == self._theme_name:
             return
-            
+
         try:
             self._load_theme(name)
             self._persist()
             # Notify the app!
             self.themeChanged.emit()
-        except ThemeLoaderError:
-            pass 
+        except ThemeLoaderError as e:
+            get_logger("theme_controller").warning(
+                f"Theme '{name}' failed to load: {e}. Keeping "
+                f"'{self._theme_name}'."
+            ) 
 
     def set_mode(self, mode: str) -> None:
         """Switch between 'light' and 'dark'."""
@@ -238,8 +248,13 @@ class ThemeController(QObject):
                 try:
                     self._load_theme(new_name)
                     changed = True
-                except ThemeLoaderError:
-                    pass
+                except ThemeLoaderError as e:
+                    # An unreadable theme on disk (hand-edited, or a partial
+                    # write) must not kill the watcher, but it should not be
+                    # invisible either.
+                    get_logger("theme_controller").warning(
+                        f"Theme '{new_name}' in {path} failed to load: {e}."
+                    )
             
             # If theme loaded ok (or didn't change), update variations
             if new_mode and new_mode != self._mode:

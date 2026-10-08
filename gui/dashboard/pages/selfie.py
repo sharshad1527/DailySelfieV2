@@ -12,10 +12,15 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QPixmap, QImage, QPainter, QPainterPath, QFont, QIcon, QMovie
 
 # Core
-from core.capture import check_if_already_captured, commit_capture_from_bytes
+from core.capture import (
+    check_if_already_captured,
+    commit_capture_from_bytes,
+    evaluate_capture_quality,
+)
 from core.index_api import get_api
 from core.logging import get_logger
-from core.quality import WARNING_MESSAGES, assess_image_quality
+# assess_image_quality now arrives via evaluate_capture_quality() in core.capture;
+# the dialog's warning text lives with the shared widget now.
 from core.config import ensure_config, apply_config_to_paths, write_config
 from core.paths import get_app_paths
 
@@ -27,6 +32,7 @@ from gui.startup.widgets.gif_button import GifButton
 from gui.startup.camera.preview import CameraPreviewThread
 from gui.qt_logging import QtSignalingHandler, install_qt_logger
 from gui.widgets.error_popup import ErrorToast
+from gui.widgets.quality_advisory import QualityAdvisoryDialog
 from gui.widgets.motion import install_motion_wrapper
 from gui.widgets.pixmap_utils import active_dpr, recolored_icon, scaled_cover_crop
 
@@ -44,86 +50,6 @@ MOOD_GIF_MAP = {
     "Awful": "sosad.gif",
 }
 
-
-class QualityAdvisoryDialog(QDialog):
-    """Frameless advisory card for failed quality checks, styled like the
-    calendar ConfirmDeleteDialog (dark card, left accent border). Advisory
-    only: Save Anyway (accept) always commits; Retake (reject) aborts."""
-
-    def __init__(self, warnings, parent=None):
-        super().__init__(parent)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setModal(True)
-        v = theme_vars()
-
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(15, 15, 15, 15)
-
-        container = QFrame()
-        container.setObjectName("Container")
-        container.setStyleSheet(f"""
-            QFrame#Container {{
-                background-color: {v['surface_container_low']};
-                border: 2px solid {v['outline_variant']};
-                border-left: 4px solid {v['error']};
-                border-radius: 14px;
-            }}
-            QLabel {{ color: {v['on_surface']}; border: none; }}
-        """)
-        outer.addWidget(container)
-
-        col = QVBoxLayout(container)
-        col.setContentsMargins(16, 16, 16, 16)
-        col.setSpacing(8)
-
-        title = QLabel("Check your photo")
-        title.setStyleSheet(f"color: {v['error']}; font-size: 14px; font-weight: bold;")
-        col.addWidget(title)
-
-        body = QLabel("\n".join(WARNING_MESSAGES.get(w, w) for w in warnings))
-        body.setStyleSheet(f"color: {v['on_surface_variant']}; font-size: 13px;")
-        col.addWidget(body)
-
-        col.addSpacing(4)
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(10)
-
-        retake_btn = QPushButton("Retake")
-        retake_btn.setCursor(Qt.PointingHandCursor)
-        retake_btn.setFixedHeight(32)
-        retake_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {v['surface_container_high']};
-                color: {v['on_surface_variant']};
-                border: 1px solid {v['outline_variant']};
-                border-radius: 16px;
-                padding: 0 12px; font-size: 11px; font-weight: 500;
-            }}
-            QPushButton:hover {{
-                background-color: {v['surface_container_highest']};
-                color: {v['on_surface']};
-                border-color: {v['outline']};
-            }}
-        """)
-        retake_btn.clicked.connect(self.reject)
-        btn_row.addWidget(retake_btn)
-        btn_row.addStretch()
-
-        save_btn = QPushButton("Save Anyway")
-        save_btn.setCursor(Qt.PointingHandCursor)
-        save_btn.setFixedHeight(32)
-        save_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {v['primary']}; color: {v['on_primary']};
-                border: none; border-radius: 16px;
-                padding: 0 12px; font-size: 11px; font-weight: 600;
-            }}
-        """)
-        save_btn.clicked.connect(self.accept)
-        btn_row.addWidget(save_btn)
-
-        col.addLayout(btn_row)
 
 class SelfiePage(QWidget):
     """
@@ -798,31 +724,32 @@ class SelfiePage(QWidget):
         byte_array = QByteArray()
         buffer = QBuffer(byte_array)
         buffer.open(QIODevice.WriteOnly)
-        quality = self.config.get("behavior", {}).get("quality", 100)
+        # Default matches core.config DEFAULT_CONFIG["behavior"]["quality"] and
+        # the popup/CLI paths. It was 100 here, which meant a missing config key
+        # silently produced heavier JPEGs than every other capture surface.
+        quality = self.config.get("behavior", {}).get("quality", 90)
         self._current_qimage.save(buffer, "JPG", quality)
         jpg_data = byte_array.data()
 
-        # Advisory quality gate: score the encoded frame before committing.
-        # Analysis errors skip the gate (log info, never block the save).
-        # The assessment doubles as the persisted quality metrics — reuse the
-        # same result; never score the frame twice.
-        quality_metrics = None  # gate disabled / analysis failed -> persist NULLs
-        if self.config.get("behavior", {}).get("quality_gate_enabled", True):
-            warnings = []
+        # Advisory quality gate: score the encoded frame once, then use that one
+        # result for BOTH the dialog decision and the persisted metrics.
+        # Metrics are recorded even when the gate is disabled — the gate controls
+        # the dialog, not the data (scoring was NULL for nearly every historical
+        # capture because the two were wrongly coupled).
+        gate_enabled = self.config.get("behavior", {}).get("quality_gate_enabled", True)
+        decision = evaluate_capture_quality(
+            bytes(jpg_data), gate_enabled=gate_enabled, logger=get_logger("gui.selfie"))
+        quality_metrics = decision.metrics
+
+        if decision.should_warn:
             try:
-                assessment = assess_image_quality(bytes(jpg_data))
-                warnings = assessment["warnings"]
-                quality_metrics = {
-                    "blur_score": assessment["blur_score"],
-                    "brightness": assessment["brightness"],
-                }
+                dlg = QualityAdvisoryDialog(list(decision.warnings), self.window())
             except Exception as e:
-                get_logger("gui.selfie").info("Quality gate skipped: %s", e)
+                # A dialog failure must never block a capture; keep the metrics.
+                get_logger("gui.selfie").info("Quality advisory unavailable: %s", e)
             else:
-                if warnings:
-                    dlg = QualityAdvisoryDialog(warnings, self.window())
-                    if not dlg.exec():
-                        return  # Retake chosen: stay in preview, commit nothing
+                if not dlg.exec():
+                    return  # Retake chosen: stay in preview, commit nothing
 
         selected_mood = None
         if self.mood_group.checkedButton():

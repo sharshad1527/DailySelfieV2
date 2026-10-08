@@ -1,4 +1,4 @@
-"""
+r"""
 autostart/windows.py
 
 Windows autostart integration using Startup folder.

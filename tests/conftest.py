@@ -10,17 +10,11 @@ Guarantees:
 from __future__ import annotations
 
 import copy
-import datetime as _datetime_module
 import os
-import sys
 import types
 from pathlib import Path
 
 import pytest
-
-# Captured at import time, before any shim is installed. Re-reading
-# `datetime.datetime` later would resolve to the shim itself.
-_DATETIME_CLASS = _datetime_module.datetime
 
 DS_ENV_KEYS = {
     "config_dir": "DS_CONFIG_DIR",
@@ -109,89 +103,15 @@ def app_paths(ds_sandbox):
     )
 
 
-def _is_datetime_binding(value) -> bool:
-    """True for stdlib `datetime` and for a shim we installed earlier.
+# NOTE: this suite used to install a `datetime` subclass shim so call sites
+# resolving "local" implicitly (bare `.astimezone()` / `.now()`) could be
+# retargeted on Windows. Every such site now goes through core.timeutils'
+# explicit-tz helpers, so the shim is gone and set_tz() only pins the
+# module-level override. If a future change reintroduces an implicit-local call
+# site, fix the call site rather than restoring the shim -- patching datetime
+# across every loaded module is a blunt instrument that silently affected
+# unrelated code.
 
-    A test may call set_tz() more than once; the previous shim is what the
-    modules are holding then, so re-patching has to recognise it too.
-    """
-    return value is _DATETIME_CLASS or getattr(value, "_ds_tz_shim", False) is True
-
-
-def _patch_tz_bindings(monkeypatch, shim) -> None:
-    """Install `shim` everywhere a stdlib `datetime` reference is visible.
-
-    Both import-time bindings (`from datetime import datetime`) and the
-    `datetime` module attribute itself (for a `from datetime import datetime`
-    executed inside a function body at call time) need the shim, otherwise a
-    stray naive `astimezone()` still reads the machine's zone.
-    """
-    # `monkeypatch.setattr(datetime, "datetime", shim)` makes every *future*
-    # `from datetime import datetime` (including ones executed inside a
-    # function body at call time) pick up the shim.
-    monkeypatch.setattr(_datetime_module, "datetime", shim)
-    for mod in list(sys.modules.values()):
-        if mod is None or mod is _datetime_module:
-            continue
-        if not _is_datetime_binding(getattr(mod, "datetime", None)):
-            continue
-        try:
-            monkeypatch.setattr(mod, "datetime", shim)
-        except (AttributeError, TypeError):  # pragma: no cover - exotic modules
-            pass
-
-
-def _datetime_shim(tz):
-    """A datetime subclass whose *implicit* local time is `tz`.
-
-    core.timeutils takes an explicit tz, which is the real fix and covers
-    every day-bucketing read. A handful of call sites outside that contract
-    still resolve "local" implicitly via `datetime.astimezone()` /
-    `datetime.now()` — core/index_api.py's `_local_hour` and
-    `get_capture_times_between` window bounds, plus the `naive.astimezone()`
-    helpers inside the test modules themselves. Those cannot see an explicit
-    tz and cannot be retargeted by changing the process TZ on Windows.
-
-    So while a `set_tz` test runs, `datetime` is temporarily swapped for a
-    subclass whose no-argument conversions resolve to the requested zone.
-    Anything that passes an explicit tz behaves exactly like stdlib
-    datetime, and monkeypatch restores every binding at teardown.
-    """
-    from datetime import datetime as _dt
-
-    def _rebuild(cls, value):
-        """Copy a datetime into the shim class (datetime is immutable)."""
-        return cls(
-            value.year, value.month, value.day,
-            value.hour, value.minute, value.second, value.microsecond,
-            tzinfo=value.tzinfo, fold=value.fold,
-        )
-
-    class _TzLocalDatetime(_dt):
-        def astimezone(self, t=None):
-            if t is None and self.tzinfo is None:
-                # stdlib reads a naive value as machine-local; here the test
-                # zone *is* the local zone, so pin it instead of converting.
-                return _rebuild(type(self), self.replace(tzinfo=tz))
-            return _rebuild(
-                type(self), _dt.astimezone(self, t if t is not None else tz)
-            )
-
-        @classmethod
-        def now(cls, t=None):
-            return _rebuild(cls, _dt.now(t if t is not None else tz))
-
-        @classmethod
-        def fromisoformat(cls, s):
-            return _rebuild(cls, _dt.fromisoformat(s))
-
-        @classmethod
-        def strptime(cls, s, fmt):
-            return _rebuild(cls, _dt.strptime(s, fmt))
-
-    # Marker so _patch_tz_bindings can re-patch over an earlier shim.
-    _TzLocalDatetime._ds_tz_shim = True
-    return _TzLocalDatetime
 
 
 @pytest.fixture()
@@ -202,8 +122,8 @@ def set_tz(monkeypatch):
     time.tzset), which is POSIX-only — every test using this fixture silently
     skipped on windows-latest, so ~25 tests never ran there. core.timeutils
     now takes an explicit zoneinfo tz, so we point its module-level default
-    override at the requested zone, and retarget the remaining implicit-local
-    datetime call sites via a temporary class shim (see _datetime_shim).
+    override at the requested zone. Every call site that needs "local" resolves
+    it through timeutils, so nothing else has to be patched.
 
     os.environ['TZ'] and time.tzset() are deliberately never touched: TZ
     tests must mean the same thing on Windows and Linux, and the process-wide
@@ -217,7 +137,6 @@ def set_tz(monkeypatch):
         # silently leaving the previous zone in place.
         resolved = timeutils.get_tz(zone)
         monkeypatch.setattr(timeutils, "_local_tz_override", resolved, raising=True)
-        _patch_tz_bindings(monkeypatch, _datetime_shim(resolved))
         return resolved
 
     _set("UTC")  # deterministic baseline before the test picks its own zone

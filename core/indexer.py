@@ -353,11 +353,13 @@ class Indexer:
             List of {'date': 'YYYY-MM-DD', 'mood': 'Great'|'Good'|'Neutral'|'Bad'|'Awful'}
         """
         from datetime import datetime, timedelta
-        from core.timeutils import local_date_str
+        from core.timeutils import local_date_str, today_local_str
 
-        # Calculate cutoff date (local)
-        today = datetime.now().date()
-        cutoff = today - timedelta(days=days_back - 1)  # -1 to include today
+        # Cutoff day comes from timeutils so it agrees with the local_date_str()
+        # bucketing applied to each row below. datetime.now().date() used the
+        # machine zone and could disagree with that bucketing by a day.
+        cutoff = datetime.strptime(today_local_str(), "%Y-%m-%d").date()
+        cutoff = cutoff - timedelta(days=days_back - 1)  # -1 to include today
         cutoff_str = cutoff.isoformat()  # 'YYYY-MM-DD'
 
         cur = self._conn.execute(

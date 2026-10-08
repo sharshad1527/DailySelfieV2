@@ -55,7 +55,12 @@ def _local_hour(ts) -> Optional[int]:
         return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone().hour
+    # Route through timeutils so this honours the same tz default as every other
+    # day-bucketing call site. Bare dt.astimezone() silently used the machine
+    # zone, which disagreed with local_date_str() and needed a monkeypatched
+    # datetime subclass in the tests to be steerable at all.
+    from core.timeutils import _as_local
+    return _as_local(dt).hour
 
 
 class HighlightsCache:
@@ -411,10 +416,13 @@ class IndexAPI:
         Matching is done on timeutils-local dates, not substr(ts, 6, 5) of the
         raw UTC ts. Returns merged DB + sidecar dict, or None when no match.
         """
-        from core.timeutils import local_date_str
+        from core.timeutils import local_date_str, today_local_str
 
         idx = self._ensure_indexer()
-        now = datetime.now().astimezone()
+        # today_local_str() buckets under the same tz default as local_date_str()
+        # above; datetime.now().astimezone() did not and disagreed with it.
+        today_str = today_local_str()
+        now = datetime.strptime(today_str, "%Y-%m-%d")
         md = now.strftime("%m-%d")
         today_str = now.strftime("%Y-%m-%d")
         cur = idx._conn.execute(
@@ -497,18 +505,26 @@ class IndexAPI:
         midnight so the SQL range matches timeutils bucketing; malformed ts
         rows are skipped. Returned order follows ts ascending.
         """
+        from core.timeutils import local_day_utc_prefixes
+
         idx = self._ensure_indexer()
-        try:
-            win_start = datetime.strptime(start, "%Y-%m-%d").astimezone()
-            win_end = datetime.strptime(end, "%Y-%m-%d").astimezone() + timedelta(days=1)
-        except ValueError:
+        # UTC bounds come from local_day_utc_prefixes(), which resolves the tz
+        # the same way as every other bucketing call. The previous
+        # strptime(...).astimezone() pair pinned to the machine zone and so
+        # disagreed with local_date_str() on the rows it filtered.
+        # A malformed bound yields no prefixes -> return nothing, rather than
+        # silently searching only the half that did parse.
+        start_prefixes = local_day_utc_prefixes(start)
+        end_prefixes = local_day_utc_prefixes(end)
+        if not start_prefixes or not end_prefixes:
             return []
-        start_utc = win_start.astimezone(timezone.utc).isoformat()
-        end_utc = win_end.astimezone(timezone.utc).isoformat()
+        prefix_list = sorted(set(start_prefixes + end_prefixes))
+        start_utc = f"{prefix_list[0]}T00:00:00+00:00"
+        end_utc = f"{prefix_list[-1]}T23:59:59.999999+00:00"
         cur = idx._conn.execute(
             """
             SELECT ts FROM captures
-            WHERE action='capture' AND ts >= ? AND ts < ?
+            WHERE action='capture' AND ts >= ? AND ts <= ?
             ORDER BY ts ASC
             """,
             (start_utc, end_utc),

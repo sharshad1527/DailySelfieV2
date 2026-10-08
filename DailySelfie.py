@@ -154,8 +154,15 @@ def cmd_capture(paths, cfg, logger, args):
     q = args.quality if args.quality is not None else beh["quality"]
     retake = args.allow_retake or beh["allow_retake"]
 
+    # Forward the behaviour flags explicitly. capture_once falls back to
+    # config.toml itself when these are None, so omitting them happened to
+    # work -- but it duplicated the defaults in two places, and a CLI
+    # invocation could silently disagree with the GUI.
+    gate = beh["quality_gate_enabled"]
+    one_per_day = beh["one_photo_per_day"]
+
     logger.info(f"Capturing with Camera {idx}...")
-    
+
     out = capture_once(
         paths,
         camera_index=idx,
@@ -163,6 +170,8 @@ def cmd_capture(paths, cfg, logger, args):
         height=h,
         quality=q,
         allow_retake=retake,
+        quality_gate_enabled=gate,
+        one_photo_per_day=one_per_day,
         logger=logger,
     )
 
